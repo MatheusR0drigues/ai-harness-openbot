@@ -15,7 +15,7 @@ O `ai-harness` separa o que é **global para todas as conversas** do que é **es
 
 | Superfície | Origem no repo | Onde atua | O que entrega |
 | :--- | :--- | :--- | :--- |
-| **Plugin Global** | `plugin/` | `/data/OpenBot/Shared/ai-harness-openbot/` | Regras universais em PT-BR, 27 skills (`spec-driven`, `spec-fast-track`, `review`, `fix-bug`, `write-tests`, `verify-app`, `harness-setup`, `create-specialist` e 19 skills de domínio), 9 subagentes nativos e scripts auxiliares (`check_secrets.py`, `validate_spec.py`). **Não** injeta CI gate nem altera `mcp_config.json`. |
+| **Plugin Global** | `plugin/` | `/data/OpenBot/Shared/ai-harness-openbot/` | Regras universais em PT-BR, 29 skills (`spec-driven`, `spec-fast-track`, `review`, `fix-bug`, `write-tests`, `verify-app`, `harness-setup`, `create-specialist` e 21 skills de domínio), 9 subagentes nativos e scripts auxiliares (`check_secrets.py`, `validate_spec.py`). **Não** injeta CI gate nem altera `mcp_config.json`. |
 | **Kit Local** | `scripts/harness/` + `harness/` | Cada repositório alvo via `cli.py init` | Gate de CI em `.github/workflows/harness-verify.yml`, baseline obrigatório em `harness/core.toml`, motor DAG (`dag_runner.py`), `check_tamper.py` + `harness/baseline.json`, runner `verify.py` e packs opt-in por stack. |
 
 Essa separação evita que hooks de código rodem em workspaces sem `scripts/harness/` e elimina sincronização automática entre múltiplos repositórios por CI ou GitHub App (o fluxo legado `propagate.yml` foi substituído por projeção explícita via `cli.py init`).
@@ -42,7 +42,7 @@ Essa separação evita que hooks de código rodem em workspaces sem `scripts/har
 
 ### 1. Sincronizar o Repositório Compartilhado (`/data/OpenBot/Shared/ai-harness-openbot`)
 
-No ambiente **OpenBot**, sincronize esta árvore exportada em `/data/OpenBot/Shared/ai-harness-openbot` como referência compartilhada única de regras, 27 skills (incluindo `verify-app`), 9 subagentes (`.agents/agents/`, `plugin/agents/` e `claude/agents/` para runtime Claude Code), kit local (`scripts/harness/`) e orquestrador DAG (`workflows/spec_dag_runner.py`).
+No ambiente **OpenBot**, sincronize esta árvore exportada em `/data/OpenBot/Shared/ai-harness-openbot` como referência compartilhada única de regras, 29 skills (incluindo `verify-app`), 9 subagentes (`.agents/agents/`, `plugin/agents/` e `claude/agents/` para runtime Claude Code), kit local (`scripts/harness/`) e orquestrador DAG (`workflows/spec_dag_runner.py`).
 
 ### 2. Instalar o Kit Local em outro repositório (`cli.py init`)
 

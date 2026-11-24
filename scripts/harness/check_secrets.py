@@ -18,6 +18,7 @@ spanning lines of a multiline finding).
 
 from __future__ import annotations
 
+import argparse
 import fnmatch
 import importlib
 import os
@@ -518,21 +519,183 @@ def expand_targets(args: Sequence[str], root: Path) -> list[Path]:
     return targets
 
 
+_HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+
+
+def resolve_diff_base(root: Path, explicit_base: str | None = None) -> str | None:
+    """Return `explicit_base` if given, else `origin/main` or `HEAD` when present in `root`."""
+    if explicit_base is not None:
+        return explicit_base
+    for candidate in ("origin/main", "HEAD"):
+        try:
+            # Bandit B603, B607: fixed argv without a shell; `git` is the user's own tool on PATH.
+            completed = subprocess.run(  # nosec B603 B607
+                [
+                    "git",
+                    "-c",
+                    "core.fsmonitor=false",
+                    "-C",
+                    str(root),
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    candidate,
+                ],
+                capture_output=True,
+                timeout=GIT_TIMEOUT,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if completed.returncode == 0:
+            return candidate
+    return None
+
+
+def git_diff_text(root: Path, base: str, targets: Sequence[str] = ()) -> str | None:
+    """Return unified=0 diff against `base` in `root`, or None on git failure."""
+    cmd = [
+        "git",
+        "-c",
+        "core.fsmonitor=false",
+        "-C",
+        str(root),
+        "diff",
+        "--unified=0",
+        "--no-color",
+        "--no-ext-diff",
+        base,
+        "--",
+        *targets,
+    ]
+    try:
+        # Bandit B603, B607: fixed argv without a shell; `git` is the user's own tool on PATH.
+        completed = subprocess.run(  # nosec B603 B607
+            cmd,
+            capture_output=True,
+            timeout=GIT_TIMEOUT,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.decode("utf-8", errors="replace")
+
+
+def parse_diff_added_lines(diff_text: str) -> dict[str, list[tuple[int, str]]]:
+    """Extract `{rel_path: [(line_number, content), ...]}` for added/modified lines in a diff."""
+    added: dict[str, list[tuple[int, str]]] = {}
+    current_file: str | None = None
+    new_line: int | None = None
+    for raw_line in diff_text.splitlines():
+        if raw_line.startswith("+++ "):
+            target = raw_line[4:]
+            if target == "/dev/null":
+                current_file = None
+            elif target.startswith("b/"):
+                current_file = target[2:]
+                added.setdefault(current_file, [])
+            else:
+                current_file = target
+                added.setdefault(current_file, [])
+            new_line = None
+            continue
+        if raw_line.startswith("--- "):
+            continue
+        if raw_line.startswith("@@ "):
+            match = _HUNK_HEADER_RE.match(raw_line)
+            new_line = int(match.group(1)) if match else None
+            continue
+        if current_file is None or new_line is None:
+            continue
+        if raw_line.startswith("+"):
+            added[current_file].append((new_line, raw_line[1:]))
+            new_line += 1
+        elif raw_line.startswith(" "):
+            new_line += 1
+    return added
+
+
+def scan_diff_text(
+    diff_text: str,
+    exempt: Sequence[str] = (),
+    extra: Sequence[PatternRule] = (),
+    safe_values: Sequence[str] = (),
+) -> list[Finding]:
+    """Scan only added/modified lines in a unified git diff (no static baseline file)."""
+    findings: list[Finding] = []
+    for rel, numbered_lines in parse_diff_added_lines(diff_text).items():
+        name = PurePosixPath(rel).name
+        if is_excluded(rel, name, exempt):
+            continue
+        if is_sensitive_file(name):
+            findings.append(Finding(rel, 0, "sensitive-file-in-diff"))
+            continue
+        if not numbered_lines:
+            continue
+        joined = "\n".join(content for _, content in numbered_lines)
+        for finding in scan_text(joined, rel, extra, safe_values):
+            actual_line = (
+                numbered_lines[finding.line - 1][0]
+                if 1 <= finding.line <= len(numbered_lines)
+                else finding.line
+            )
+            findings.append(Finding(rel, actual_line, finding.rule))
+    return findings
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Scan repository or git diff for secrets.")
+    parser.add_argument("paths", nargs="*", help="files or directories to scan")
+    parser.add_argument(
+        "--diff",
+        action="store_true",
+        help="scan only added/modified lines in git diff against --base",
+    )
+    parser.add_argument(
+        "--base",
+        default=None,
+        help="git ref for --diff (default: origin/main or HEAD)",
+    )
+    parser.add_argument("--repo-root", type=Path, default=None, help="target repository root")
+    parser.add_argument("--config", type=Path, default=None, help="harness.toml path")
+    return parser
+
+
 def main(
     argv: Sequence[str] | None = None,
     root: Path = REPO_ROOT,
     config_path: Path | None = None,
 ) -> int:
-    args = list(sys.argv[1:] if argv is None else argv)
+    raw_args = list(sys.argv[1:] if argv is None else argv)
+    parsed = _build_parser().parse_args(raw_args)
+    effective_root = root if parsed.repo_root is None else parsed.repo_root
+    effective_config = config_path if parsed.config is None else parsed.config
+    if effective_config is None and parsed.repo_root is not None:
+        effective_config = effective_root / "harness.toml"
     try:
-        exempt, extra, safe_values = load_settings(config_path)
+        exempt, extra, safe_values = load_settings(effective_config)
     except Exception as exc:
         if _CONFIG_MODULE is not None and isinstance(exc, _CONFIG_MODULE.ConfigError):
             print(f"HARNESS CONFIG INVALID: {exc}")
             return 1
         raise
-    files = expand_targets(args, root)
-    findings = scan_files(files, root, exempt, extra, safe_values, explicit=bool(args))
+    if parsed.diff:
+        base = resolve_diff_base(effective_root, parsed.base)
+        if base is None:
+            print("SECRET SCAN FAILED: could not resolve git diff base (pass --base <ref>)")
+            return 1
+        diff_text = git_diff_text(effective_root, base, parsed.paths)
+        if diff_text is None:
+            print(f"SECRET SCAN FAILED: git diff failed for base `{base}`")
+            return 1
+        findings = scan_diff_text(diff_text, exempt, extra, safe_values)
+    else:
+        files = expand_targets(parsed.paths, effective_root)
+        findings = scan_files(
+            files, effective_root, exempt, extra, safe_values, explicit=bool(parsed.paths)
+        )
     if not findings:
         print("SECRET SCAN PASSED")
         return 0

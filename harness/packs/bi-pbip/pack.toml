@@ -1,12 +1,12 @@
 [pack]
 name = "bi-pbip"
-description = "Validacao para projetos Power BI PBIP/PBIR/TMDL: indentacao e protecao contra PII em filtros."
+description = "Validacao estatica para projetos Power BI PBIP/PBIR/TMDL: estrutura/$schema PBIR, lint DAX/BPA, indentacao TMDL e protecao contra PII em filtros."
 rules = ["rules/bi-pbip.md"]
 
 [[gates]]
 name = "pbip-sanity"
 command = ["python", "harness/packs/bi-pbip/scripts/check_pbip_sanity.py"]
-hint = "Indentacao TMDL comeca com tab (como o Desktop grava) e remova literais de PII dos filtros JSON do relatorio."
+hint = "Mantenha indentacao TMDL com tab, use DIVIDE() e VAR/RETURN em medidas DAX complexas, preserve $schema valido em artefatos PBIR e remova literais de PII dos filtros JSON."
 group = "stack"
 fast = true
 timeout = 120

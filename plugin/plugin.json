@@ -2,7 +2,7 @@
   "name": "ai-harness",
   "displayName": "AI Harness: Engenharia Proporcional e Segura (OpenBot)",
   "version": "0.3.0",
-  "description": "Regras universais em PT-BR, fluxo em 3 Tiers com roteamento híbrido de modelos (flash/inherit), 27 skills sob demanda (incluindo verify-app), orquestração DAG Nível 2 em workflows/spec_dag_runner.py e 9 subagentes OpenBot no modo hookless / CI-first.",
+  "description": "Regras universais em PT-BR, fluxo em 3 Tiers com roteamento híbrido de modelos (flash/inherit), 29 skills sob demanda (incluindo verify-app), orquestração DAG Nível 2 em workflows/spec_dag_runner.py e 9 subagentes OpenBot no modo hookless / CI-first.",
   "suggestedPrompts": [
     "Executar esta tarefa focalizada no fluxo Tier 1 (spec-fast-track)",
     "Iniciar uma nova feature complexa com o fluxo spec-driven (Tier 2)",

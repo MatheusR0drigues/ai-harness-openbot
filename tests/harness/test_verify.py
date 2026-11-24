@@ -440,3 +440,52 @@ def test_utf8_console_prints_raw_characters(
     out = written(stdout)
     assert f"{CHECK_MARK} done".encode() in out
     assert ESCAPED_CHECK_MARK not in out
+
+
+def test_resolve_command_rewrites_harness_scripts_in_external_mode(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    ext_cfg = tmp_path / "ext.toml"
+    ext_cfg.write_text("", encoding="utf-8")
+
+    cmd = verify.resolve_command(
+        ("python", "scripts/harness/check_secrets.py", "--diff"),
+        repo_root=target,
+        harness_root=verify.REPO_ROOT,
+        config_path=ext_cfg,
+    )
+
+    assert cmd[0] == sys.executable
+    assert Path(cmd[1]) == verify.REPO_ROOT / "scripts/harness/check_secrets.py"
+    assert "--diff" in cmd
+    assert "--repo-root" in cmd
+    assert str(target) in cmd
+    assert "--config" in cmd
+    assert str(ext_cfg) in cmd
+
+
+def test_main_external_repo_root_and_config_runs_without_local_harness(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    target = tmp_path / "clean_target"
+    target.mkdir()
+    (target / "app.py").write_text("x = 1\n", encoding="utf-8")
+
+    ext_cfg = tmp_path / "external-harness.toml"
+    ext_cfg.write_text(
+        '[project]\nname = "ext"\n\n'
+        '[[gates]]\nname = "py-check"\ncommand = ["python", "-c", "print(1)"]\n'
+        'hint = "h"\ngroup = "stack"\nrequires_glob = "**/*.py"\n',
+        encoding="utf-8",
+    )
+
+    runner = FakeRunner()
+    code = verify.main(
+        ["--repo-root", str(target), "--config", str(ext_cfg), "--group", "stack"],
+        runner=runner,
+    )
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert f"{verify.SUCCESS_BANNER} (py-check)" in out
+    assert runner.ran == ["print(1)"]

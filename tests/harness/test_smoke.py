@@ -23,6 +23,7 @@ RUNTIME = ROOT / "scripts" / "harness"
 PLUGIN = ROOT / "plugin"
 RUNTIME_MODULES = sorted(path.stem for path in RUNTIME.glob("*.py"))
 SHARED_SCRIPTS = ("check_secrets.py", "validate_spec.py")
+PLUGIN_HELPER_SCRIPTS = ("pr_via_rest_api.py",)
 REMOVED_MODULES = (
     "sync_adapters.py",
     "distribute.py",
@@ -56,7 +57,7 @@ def test_plugin_ships_only_the_shared_scripts() -> None:
     shipped = sorted(p.name for p in (PLUGIN / "scripts").iterdir() if p.is_file())
     in_skills = sorted(p.relative_to(PLUGIN).as_posix() for p in PLUGIN.glob("skills/**/*.py"))
 
-    assert shipped == sorted(SHARED_SCRIPTS)
+    assert shipped == sorted((*SHARED_SCRIPTS, *PLUGIN_HELPER_SCRIPTS))
     assert in_skills == []
 
 

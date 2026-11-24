@@ -116,6 +116,8 @@ SKILLS = (
     "resilience-patterns",
     "create-specialist",
     "verify-app",
+    "pr-via-rest-api",
+    "ata-para-cartoes",
 )
 SUBAGENTS = (
     "researcher",

@@ -416,3 +416,28 @@ def test_skip_templates_accepts_valid_subset(
     cfg = config.load(write(tmp_path, f"[init]\nskip_templates = {value}\n"))
 
     assert cfg.init_skip_templates == expected
+
+
+def test_load_supports_external_harness_root_fallback(tmp_path: Path) -> None:
+    harness_root = tmp_path / "shared_harness"
+    write_core(harness_root, CORE)
+    write_pack(
+        harness_root,
+        "python",
+        '[[gates]]\nname = "lint"\ncommand = ["python", "-m", "ruff"]\n'
+        'hint = "h"\ngroup = "stack"\n',
+    )
+
+    target_repo = tmp_path / "target_repo"
+    target_repo.mkdir()
+    ext_cfg = tmp_path / "external-harness.toml"
+    ext_cfg.write_text(
+        '[project]\nname = "external-target"\n\n[packs]\nenabled = ["python"]\n',
+        encoding="utf-8",
+    )
+
+    cfg = config.load(ext_cfg, harness_root=harness_root)
+
+    assert cfg.project_name == "external-target"
+    assert cfg.packs == ("python",)
+    assert [g.name for g in cfg.gates] == ["secrets", "lint"]

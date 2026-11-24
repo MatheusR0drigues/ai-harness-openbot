@@ -411,3 +411,76 @@ def test_pbip_nested_object_under_query_ref_scanned() -> None:
     assert len(findings) == 1
     assert "CPF" in findings[0]
     assert "filterConfig.filters[0].queryRef.x" in findings[0]
+
+
+def test_pbip_pbir_schema_validation_and_root_object(tmp_path: Path) -> None:
+    assert "raiz do JSON" in pbip_mod.check_report_json_text("[]")[0]
+
+    bad_schema = pbip_mod.check_report_json_text(
+        '{"$schema": "http://insecure.example/visualContainer.json"}',
+        rel_path="R.Report/definition/pages/p1/visuals/v1/visual.json",
+    )
+    assert any("https://" in item for item in bad_schema)
+
+    mismatch = pbip_mod.check_report_json_text(
+        '{"$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/page/1.0.0/schema.json"}',
+        rel_path="R.Report/definition/pages/p1/visuals/v1/visual.json",
+    )
+    assert any("inconsistente" in item for item in mismatch)
+
+    missing_in_def = pbip_mod.check_report_json_text(
+        '{"name": "v1"}',
+        rel_path="R.Report/definition/pages/p1/visuals/v1/visual.json",
+    )
+    assert any("$schema" in item for item in missing_in_def)
+
+    pbir_file = tmp_path / "R.Report" / "definition.pbir"
+    pbir_file.parent.mkdir(parents=True)
+    pbir_file.write_text(
+        json.dumps(
+            {
+                "$schema": (
+                    "https://developer.microsoft.com/json-schemas/fabric/item/report/"
+                    "definitionProperties/2.0.0/schema.json"
+                ),
+                "version": "4.0",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert pbip_mod.check_paths(tmp_path) == []
+
+
+def test_pbip_dax_bpa_lint_on_tmdl() -> None:
+    bad_tmdl = (
+        "table Vendas\n"
+        "\tmeasure Margem = SUM(Vendas[Lucro]) / SUM(Vendas[Receita])\n"
+        "\tmeasure Seguro = IFERROR(1, 0)\n"
+        "\tmeasure Complexa =\n"
+        "\t\tCALCULATE(\n"
+        "\t\t\tSUM(Vendas[Valor]),\n"
+        "\t\t\tVendas[Ativo] = TRUE(),\n"
+        '\t\t\tVendas[Canal] = "Online",\n'
+        "\t\t\tREMOVEFILTERS(Vendas[Regiao]),\n"
+        "\t\t\tKEEPFILTERS(Vendas[Ano] = 2025)\n"
+        "\t\t)\n"
+    )
+    findings = pbip_mod.check_tmdl_text(bad_tmdl)
+    reasons = [msg for _, msg in findings]
+    assert any("DIVIDE(" in msg for msg in reasons)
+    assert any("IFERROR()" in msg for msg in reasons)
+    assert any("VAR/RETURN" in msg for msg in reasons)
+
+    clean_tmdl = (
+        "table Vendas\n"
+        "\tmeasure Margem =\n"
+        "\t\tVAR _Lucro = SUM(Vendas[Lucro])\n"
+        "\t\tVAR _Receita = SUM(Vendas[Receita])\n"
+        "\t\tVAR _Taxa = DIVIDE(_Lucro, _Receita, 0)\n"
+        '\t\tVAR _Label = "a/b" // comentario com /\n'
+        '\t\tVAR _Texto = "IFERROR(1, 0)"\n'
+        "\t\tRETURN\n"
+        "\t\t\t_Taxa\n"
+        "\tmeasure Permitida = SUM(Vendas[A]) / SUM(Vendas[B]) // pbip-sanity: allow\n"
+    )
+    assert pbip_mod.check_tmdl_text(clean_tmdl) == []

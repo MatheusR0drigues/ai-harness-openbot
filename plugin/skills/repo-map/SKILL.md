@@ -1,6 +1,6 @@
 ---
 name: repo-map
-description: "Mapeamento econômico de base de código via researcher (flash/flash_lite), extraindo árvore relevante, pontos de entrada, assinaturas e contratos dentro de orçamento estrito de tokens."
+description: "Mapeamento econômico de base de código via subagente researcher (modelo leve/rápido), extraindo árvore relevante, pontos de entrada, assinaturas e contratos dentro de orçamento estrito de tokens."
 ---
 
 # Repo Map (Mapeamento Econômico de Repositório)
@@ -17,7 +17,7 @@ Gera um mapa estrutural enxuto de um módulo ou repositório antes de planejar m
 
 - Prefira extrair **esqueletos** (árvore de diretórios filtrada, pontos de entrada, nomes de classes/funções, assinaturas tipadas e contratos) em vez de copiar implementações completas.
 - Mantenha a ordem de blocos estáticos antes dos dinâmicos para favorecer o *Prefix Caching*.
-- Use o subagente `researcher` com `Model="flash"` (ou `"flash_lite"` para listagens puras) mantendo o contexto principal livre para raciocínio de design.
+- Delegue o levantamento ao subagente `researcher` (no modelo leve/rápido configurado para ele no runtime) mantendo o contexto principal livre para raciocínio de design.
 
 ## Roteiro de Execução
 

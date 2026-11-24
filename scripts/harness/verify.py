@@ -57,20 +57,45 @@ class RunResult:
 Runner = Callable[[Sequence[str], int], RunResult]
 
 
-def resolve_command(command: Sequence[str]) -> list[str]:
-    """A leading `python` means "the interpreter running the harness", so gates use its venv."""
+def resolve_command(
+    command: Sequence[str],
+    *,
+    repo_root: Path = REPO_ROOT,
+    harness_root: Path = REPO_ROOT,
+    config_path: Path | None = None,
+) -> list[str]:
+    """A leading `python` means "the interpreter running the harness", so gates use its venv.
+
+    In external mode (`repo_root != harness_root`), harness-owned script paths that do not exist
+    under `repo_root` resolve against `harness_root`, and `check_secrets.py` receives
+    `--repo-root` (and `--config`) so it scans the target repository.
+    """
     resolved = list(command)
     if resolved and resolved[0] == "python":
         resolved[0] = sys.executable
+    if repo_root.resolve() != harness_root.resolve():
+        for idx in range(1, len(resolved)):
+            norm = resolved[idx].replace("\\", "/")
+            if (
+                norm.startswith(("scripts/harness/", "harness/packs/"))
+                and not (repo_root / norm).exists()
+                and (harness_root / norm).exists()
+            ):
+                resolved[idx] = str(harness_root / norm)
+        if any(Path(token).name == "check_secrets.py" for token in resolved):
+            if "--repo-root" not in resolved:
+                resolved.extend(["--repo-root", str(repo_root)])
+            if config_path is not None and "--config" not in resolved:
+                resolved.extend(["--config", str(config_path)])
     return resolved
 
 
-def subprocess_runner(command: Sequence[str], timeout: int) -> RunResult:
+def subprocess_runner(command: Sequence[str], timeout: int, *, cwd: Path = REPO_ROOT) -> RunResult:
     try:
         # Bandit B603: argv list from harness/core.toml, harness.toml or a pack, never a shell.
         completed = subprocess.run(  # nosec B603
             list(command),
-            cwd=REPO_ROOT,
+            cwd=cwd,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -156,6 +181,8 @@ def run_gates(
     runner: Runner,
     max_lines: int = MAX_LINES,
     root: Path = REPO_ROOT,
+    harness_root: Path = REPO_ROOT,
+    config_path: Path | None = None,
 ) -> tuple[bool, str]:
     """Run gates in order; conditional gates without matching files are skipped, not failed."""
     passed: list[str] = []
@@ -166,7 +193,13 @@ def run_gates(
         if reason is not None:
             skipped.append(f"SKIPPED: {gate.name} ({reason})")
             continue
-        result = runner(resolve_command(gate.command), gate.timeout)
+        cmd = resolve_command(
+            gate.command,
+            repo_root=root,
+            harness_root=harness_root,
+            config_path=config_path,
+        )
+        result = runner(cmd, gate.timeout)
         if result.returncode != 0:
             header = f"Passed: {', '.join(passed)}" if passed else "Passed: (none)"
             report = [header, *skipped, format_failure(gate, result, max_lines)]
@@ -200,9 +233,21 @@ def main(
     parser.add_argument(
         "--group", choices=config.GROUPS, default="", help="only gates of this group (CI: core)"
     )
+    parser.add_argument("--repo-root", type=Path, default=None, help="external target repo root")
+    parser.add_argument("--config", type=Path, default=None, help="external harness.toml path")
     args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
+    effective_root = (
+        (REPO_ROOT if root is None else root) if args.repo_root is None else args.repo_root
+    )
+    effective_config = config_path if args.config is None else args.config
+    if effective_config is None and args.repo_root is not None:
+        effective_config = effective_root / "harness.toml"
+    external_mode = args.repo_root is not None or args.config is not None
     try:
-        cfg = config.load(config_path)
+        cfg = config.load(
+            effective_config,
+            harness_root=REPO_ROOT if external_mode else None,
+        )
     except ConfigError as exc:
         print(f"HARNESS CONFIG INVALID: {exc}")
         print(
@@ -214,7 +259,22 @@ def main(
     if args.group and not selected:
         print(f"HARNESS CONFIG INVALID: no gates in group `{args.group}`")
         return 1
-    ok, report = run_gates(selected, runner, root=REPO_ROOT if root is None else root)
+
+    def _effective_runner(command: Sequence[str], timeout: int) -> RunResult:
+        return subprocess_runner(command, timeout, cwd=effective_root)
+
+    active_runner = (
+        _effective_runner
+        if runner is subprocess_runner and effective_root.resolve() != REPO_ROOT.resolve()
+        else runner
+    )
+    ok, report = run_gates(
+        selected,
+        active_runner,
+        root=effective_root,
+        harness_root=REPO_ROOT,
+        config_path=effective_config,
+    )
     print(report)
     # The `harness` group is the stack of a harness source repository (its own tests and lint).
     if not any(g.group in ("stack", "harness") for g in cfg.gates):

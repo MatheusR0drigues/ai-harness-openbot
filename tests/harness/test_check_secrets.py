@@ -468,3 +468,58 @@ def test_scan_text_multiline_allow_marker_only_counts_on_the_first_line() -> Non
 
 def test_repository_is_clean() -> None:
     assert check_secrets.main([]) == 0
+
+
+def test_parse_diff_added_lines_and_scan_diff_text() -> None:
+    diff = (
+        "diff --git a/src/app.py b/src/app.py\n"
+        "index 111..222 100644\n"
+        "--- a/src/app.py\n"
+        "+++ b/src/app.py\n"
+        "@@ -10,0 +11,2 @@ def fn():\n"
+        "+clean = 1\n"
+        f"+leaked = '{AWS_KEY}'\n"
+        "diff --git a/.env b/.env\n"
+        "new file mode 100644\n"
+        "--- /dev/null\n"
+        "+++ b/.env\n"
+        "@@ -0,0 +1 @@\n"
+        "+FOO=bar\n"
+        "diff --git a/docs/ignored.md b/docs/ignored.md\n"
+        "--- a/docs/ignored.md\n"
+        "+++ b/docs/ignored.md\n"
+        "@@ -1,0 +1 @@\n"
+        f"+{AWS_KEY}\n"
+    )
+    findings = check_secrets.scan_diff_text(diff, exempt=("docs/",))
+
+    assert [(f.path, f.line, f.rule) for f in findings] == [
+        ("src/app.py", 12, "aws-access-key-id"),
+        (".env", 0, "sensitive-file-in-diff"),
+    ]
+
+
+def test_main_diff_ignores_legacy_committed_secret_and_catches_new_diff_secret(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "config", "user.email", "test@example.com")
+    git(tmp_path, "config", "user.name", "Tester")
+
+    legacy = tmp_path / "legacy.py"
+    legacy.write_text(f"LEGACY = '{AWS_KEY}'\n", encoding="utf-8")
+    git(tmp_path, "add", "legacy.py")
+    git(tmp_path, "commit", "-q", "-m", "initial")
+
+    # Unmodified legacy secret is not flagged in --diff mode.
+    (tmp_path / "clean.py").write_text("x = 42\n", encoding="utf-8")
+    git(tmp_path, "add", "clean.py")
+    assert check_secrets.main(["--diff", "--base", "HEAD", "--repo-root", str(tmp_path)]) == 0
+    assert "SECRET SCAN PASSED" in capsys.readouterr().out
+
+    # Adding a secret in the working diff is caught.
+    (tmp_path / "new.py").write_text(f"NEW_KEY = '{AWS_KEY}'\n", encoding="utf-8")
+    git(tmp_path, "add", "new.py")
+    assert check_secrets.main(["--diff", "--base", "HEAD", "--repo-root", str(tmp_path)]) == 1
+    out = capsys.readouterr().out
+    assert "new.py:1: [aws-access-key-id]" in out

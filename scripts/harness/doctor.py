@@ -15,6 +15,7 @@ Exit code: 0 when every check passes, 1 otherwise.
 
 from __future__ import annotations
 
+import argparse
 import json
 import shutil
 import sys
@@ -64,9 +65,11 @@ def check_python(version: Sequence[int], executable: str) -> Check:
     )
 
 
-def load_config(target: Path) -> tuple[HarnessConfig | None, Check]:
+def load_config(
+    target: Path, *, harness_root: Path | None = None
+) -> tuple[HarnessConfig | None, Check]:
     try:
-        cfg = config.load(target)
+        cfg = config.load(target, harness_root=harness_root)
     except ConfigError as exc:
         return None, Check(
             "config",
@@ -128,18 +131,28 @@ def enabled_packs(target: Path) -> tuple[str, ...]:
     return tuple(item for item in cast(list[object], enabled) if isinstance(item, str))
 
 
-def check_packs(root: Path, packs: Sequence[str]) -> list[Check]:
+def check_packs(
+    root: Path, packs: Sequence[str], *, harness_root: Path | None = None
+) -> list[Check]:
     checks: list[Check] = []
     for name in packs:
         manifest = root / config.PACKS_RELATIVE / name / config.PACK_FILE
         installed = manifest.is_file()
+        if installed:
+            detail = manifest.relative_to(root).as_posix()
+        elif (
+            harness_root is not None
+            and (harness_root / config.PACKS_RELATIVE / name / config.PACK_FILE).is_file()
+        ):
+            installed = True
+            detail = f"external:{config.PACKS_RELATIVE.as_posix()}/{name}/{config.PACK_FILE}"
+        else:
+            detail = f"enabled in harness.toml but harness/packs/{name}/pack.toml is missing"
         checks.append(
             Check(
                 f"pack:{name}",
                 installed,
-                manifest.relative_to(root).as_posix()
-                if installed
-                else f"enabled in harness.toml but harness/packs/{name}/pack.toml is missing",
+                detail,
                 "" if installed else f"Run `python scripts/harness/cli.py init --packs {name}`.",
             )
         )
@@ -223,16 +236,27 @@ def run_checks(
     config_path: Path | None = None,
     version: Sequence[int] = (sys.version_info.major, sys.version_info.minor),
     executable: str = sys.executable,
+    external: bool = False,
 ) -> tuple[Check, ...]:
     target = root / "harness.toml" if config_path is None else config_path
-    cfg, config_check = load_config(target)
+    harness_fallback = REPO_ROOT if external else None
+    cfg, config_check = load_config(target, harness_root=harness_fallback)
+    hooks_check = (
+        Check("hooks", True, "external mode (no local hooks required)")
+        if external
+        else check_hooks_file(root)
+    )
     checks = [
         check_python(version, executable),
         config_check,
-        check_hooks_file(root),
+        hooks_check,
         check_local_agents(root),
     ]
-    checks += check_packs(root, cfg.packs if cfg is not None else enabled_packs(target))
+    checks += check_packs(
+        root,
+        cfg.packs if cfg is not None else enabled_packs(target),
+        harness_root=harness_fallback,
+    )
     if cfg is not None:
         checks += diagnose(cfg, runner=runner, which=which, root=root)
     return tuple(checks)
@@ -256,10 +280,32 @@ def main(
     config_path: Path | None = None,
 ) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
-    if args:
-        print("usage: doctor.py")
+    parser = argparse.ArgumentParser(prog="doctor.py", add_help=False)
+    parser.add_argument("--repo-root", type=Path, default=None)
+    parser.add_argument("--config", type=Path, default=None)
+    try:
+        parsed, unknown = parser.parse_known_args(args)
+    except SystemExit:
+        print("usage: doctor.py [--repo-root DIR] [--config PATH]")
         return 1
-    checks = run_checks(runner=runner, which=which, root=root, config_path=config_path)
+    if unknown:
+        print("usage: doctor.py [--repo-root DIR] [--config PATH]")
+        return 1
+    effective_root = root if parsed.repo_root is None else parsed.repo_root
+    effective_config = config_path if parsed.config is None else parsed.config
+    if effective_config is None and parsed.repo_root is not None:
+        effective_config = effective_root / "harness.toml"
+    external = (parsed.repo_root is not None or parsed.config is not None) and (
+        effective_root.resolve() != REPO_ROOT.resolve()
+        or not (effective_root / config.CORE_RELATIVE).is_file()
+    )
+    checks = run_checks(
+        runner=runner,
+        which=which,
+        root=effective_root,
+        config_path=effective_config,
+        external=external,
+    )
     print(render(checks))
     return 0 if all(check.ok for check in checks) else 1
 

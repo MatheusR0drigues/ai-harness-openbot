@@ -489,12 +489,20 @@ def merge_packs(cfg: HarnessConfig, packs: tuple[Pack, ...]) -> HarnessConfig:
     return replace(cfg, gates=core + tuple(pack_gates) + project)
 
 
-def load(path: Path | None = None) -> HarnessConfig:
-    """Load harness.toml merged over harness/core.toml and the enabled packs next to it."""
+def load(path: Path | None = None, *, harness_root: Path | None = None) -> HarnessConfig:
+    """Load harness.toml merged over harness/core.toml and the enabled packs next to it.
+
+    When `harness_root` is provided (external mode), `harness/core.toml` and `harness/packs/`
+    fall back to `harness_root` if they are not present next to `target`.
+    """
     target = CONFIG_PATH if path is None else path
     if not target.is_file():
         raise ConfigError(f"{target.as_posix()} does not exist")
     core_path = target.parent / CORE_RELATIVE
+    if not core_path.is_file() and harness_root is not None:
+        fallback_core = harness_root / CORE_RELATIVE
+        if fallback_core.is_file():
+            core_path = fallback_core
     if not core_path.is_file():
         raise ConfigError(
             f"{core_path.as_posix()} does not exist; it holds the core gates and the controls "
@@ -505,5 +513,10 @@ def load(path: Path | None = None) -> HarnessConfig:
         if key not in CORE_KEYS:
             raise ConfigError(f"harness/core.toml: unknown key `{key}` (allowed: controls, gates)")
     merged = merge(parse(core_data), parse(_read(target)))
-    packs = tuple(load_pack(target.parent, name) for name in merged.packs)
-    return merge_packs(merged, packs)
+    packs_list: list[Pack] = []
+    for name in merged.packs:
+        if (target.parent / PACKS_RELATIVE / name / PACK_FILE).is_file() or harness_root is None:
+            packs_list.append(load_pack(target.parent, name))
+        else:
+            packs_list.append(load_pack(harness_root, name))
+    return merge_packs(merged, tuple(packs_list))
