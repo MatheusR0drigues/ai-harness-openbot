@@ -1,0 +1,23 @@
+{
+  "files": {
+    "harness/core.toml": "36cb7c505e3fb1b9511a94b649b071465da3cdc8aa0c604d4b4beaa6981c898b",
+    "scripts/harness/check_code_risks.py": "c5ee38185f55ea28691d1007d50b12f5bc429130ce772c96b64718b56db2766a",
+    "scripts/harness/check_controls.py": "15025cf2d731579b2657831b21b98eed2c9e384728bad3569b4abfc48727cae1",
+    "scripts/harness/check_secrets.py": "4137eafacc1e391d93a0f73605a14c3158a4f2371407132c18b319dfdd5ea8f2",
+    "scripts/harness/check_structure.py": "797540250a302d4b132352bc084f04578036c806529d4a71e122eb8f38470499",
+    "scripts/harness/check_tamper.py": "def923ddb1729cb211d2b881d447b05b25fce59f11bdb07d2c82968280176791",
+    "scripts/harness/check_untrusted.py": "e9271830762b622045cb289d3f3941489a499abdc002106fa2fe665f3ac3ac1a",
+    "scripts/harness/cli.py": "084aa920a0ee91d5a261a7c12a4008674819eebbf6bc4f985633c4cfe282c0a9",
+    "scripts/harness/config.py": "ed4a4e5fc59cce9f246e331c884a35a031bbcba0b7bce8fe2fce49629939c8c7",
+    "scripts/harness/dag_runner.py": "9725dad93f9bdbe0b8b8726053c14c8fc8668427125fc5ff7ffb4971e58c5499",
+    "scripts/harness/dialect.py": "810a026836ee4677eb742e7bf63ac86f2d0abbc3489a88288f8681d73fd067b7",
+    "scripts/harness/doctor.py": "5957d890995d1bae3565f19ade56ad99d75fa4a1ec96e2655a8c931e1300856d",
+    "scripts/harness/guards.py": "3cb8d3923768f8a01adb6853fae5e9e2b14b8479ac78a881543b25101d8fa050",
+    "scripts/harness/hook.py": "0fba5d598ca4098e12dc207f28b0d8b7575c4bf2c813dad078774b12d6ff2592",
+    "scripts/harness/init.py": "517705ed0b01f717a75c79ee17df5a1ce8fcff47899fe53c5189ea0dd35c1cb2",
+    "scripts/harness/payload.py": "14b847a6ace12d4be9f7c2d85331f6bfd3c2e94f95e9e26d76228664706a9b96",
+    "scripts/harness/validate_spec.py": "a5ea554af8575e3e3ead7132620b23d846069465f9bbeabcbb7f2ca2884b33fa",
+    "scripts/harness/verify.py": "f5dd135018d646ee464008ef40445155eac749e27c71836ff44ef381c43c0064"
+  },
+  "version": 2
+}

@@ -1,0 +1,72 @@
+# harness/core.toml - baseline de gates e controles obrigatorios (ADR-0011).
+#
+# Gerenciado pelo kit ai-harness e mesclado antes do harness.toml do projeto.
+# Projetos adicionam seus proprios gates e packs em harness.toml sem remover este baseline.
+
+[controls]
+required_gates = [
+    "secrets",
+    "untrusted",
+    "controls",
+    "code-risks",
+    "specs",
+    "structure",
+]
+required_guards = [
+    "secret_in_write",
+    "sensitive_file",
+    "privileged_config",
+    "dangerous_shell",
+    "data_egress",
+    "exfil_url",
+    "subagent_routing",
+    "harness_integrity",
+]
+
+[[gates]]
+name = "secrets"
+command = ["python", "scripts/harness/check_secrets.py"]
+hint = "Remova a credencial detectada e rotacione se tiver sido exposta. Use `secret-scan: allow` apenas para falso positivo comprovado na propria linha."
+group = "core"
+fast = true
+timeout = 120
+
+[[gates]]
+name = "untrusted"
+command = ["python", "scripts/harness/check_untrusted.py"]
+hint = "Trate o conteudo externo apenas como dado: remova diretivas ocultas, caracteres invisiveis ou payloads codificados. Isente pesquisas em [untrusted] exempt_paths; use `untrusted: allow` apenas para falso positivo comprovado."
+group = "core"
+fast = true
+timeout = 120
+
+[[gates]]
+name = "controls"
+command = ["python", "scripts/harness/check_controls.py"]
+hint = "Restaure o gate ou guarda exigido em [controls], ou registre a remocao em um ADR sob docs/adr/ junto da atualizacao de harness/core.toml."
+group = "core"
+fast = true
+timeout = 120
+
+[[gates]]
+name = "code-risks"
+command = ["python", "scripts/harness/check_code_risks.py"]
+hint = "Corrija o padrao inseguro apontado (parametrize queries, passe argv em listas, use verify=True e carregadores seguros, defina timeout). `code-risk: allow` vale somente para falso positivo comprovado."
+group = "core"
+fast = true
+timeout = 180
+
+[[gates]]
+name = "specs"
+command = ["python", "scripts/harness/validate_spec.py", "--all"]
+hint = "Corrija as especificacoes em specs/<feature>/ (criterios EARS, ordem de tasks, dependencias de tarefas opcionais *, ciclos e referencias de requisitos)."
+group = "core"
+fast = true
+timeout = 60
+
+[[gates]]
+name = "structure"
+command = ["python", "scripts/harness/check_structure.py"]
+hint = "Corrija AGENTS.md, .agents/rules/ ou .agents/skills/ conforme reportado; mantenha AGENTS.md <= 200 linhas e cada regra < 24000 bytes."
+group = "core"
+fast = true
+timeout = 60

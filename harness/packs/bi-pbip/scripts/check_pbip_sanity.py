@@ -1,0 +1,240 @@
+"""Valida indentacao TMDL e vazamento de PII em filtros JSON de projetos PBIP/PBIR."""
+
+from __future__ import annotations
+
+import argparse
+import importlib
+import json
+import re
+import sys
+from collections.abc import Iterable
+from pathlib import Path
+from typing import cast
+
+HARNESS_DIR = Path(__file__).resolve().parents[4] / "scripts" / "harness"
+if str(HARNESS_DIR) not in sys.path:
+    sys.path.insert(0, str(HARNESS_DIR))
+
+RUNTIME_MISSING = "harness runtime not found (scripts/harness/check_secrets.py)"
+ALLOW_MARKER = "pbip-sanity: allow"
+IGNORE_DIRS = frozenset(
+    {
+        ".git",
+        ".venv",
+        "venv",
+        "__pycache__",
+        "node_modules",
+        "build",
+        "dist",
+        "raw",
+        "docs",
+        "tests",
+    }
+)
+REPORT_JSON_NAMES = frozenset({"page.json", "report.json", "visual.json", "bookmarks.json"})
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+CPF_FORMATTED_RE = re.compile(r"\b\d{3}\.\d{3}\.\d{3}-\d{2}\b")
+CPF_DIGITS_RE = re.compile(r"(?<!\d)\d{11}(?!\d)")
+ID_KEYS = frozenset({"name", "queryRef", "nativeQueryRef"})
+
+
+def _runtime_found() -> bool:
+    """The candidate listing and the binary rule come from `scripts/harness/check_secrets.py`."""
+    try:
+        importlib.import_module("check_secrets")
+    except ImportError:
+        return False
+    return True
+
+
+def find_root(start: Path | None = None) -> Path:
+    current = (start or Path.cwd()).resolve()
+    for candidate in (current, *current.parents):
+        if (candidate / "harness.toml").is_file() or (candidate / ".git").exists():
+            return candidate
+    return current
+
+
+def _is_ignored(path: Path, root: Path) -> bool:
+    try:
+        rel_parts = path.resolve().relative_to(root.resolve()).parts
+    except ValueError:
+        rel_parts = path.parts
+    return any(part in IGNORE_DIRS for part in rel_parts)
+
+
+def _is_report_json(path: Path) -> bool:
+    return path.name in REPORT_JSON_NAMES or path.name.endswith(".bookmark.json")
+
+
+def iter_target_files(root: Path, paths: Iterable[Path] | None = None) -> list[Path]:
+    import check_secrets
+
+    root_resolved = root.resolve()
+    candidates: list[Path] = []
+    if paths:
+        for item in paths:
+            resolved = (item if item.is_absolute() else (root_resolved / item)).resolve()
+            try:
+                resolved.relative_to(root_resolved)
+            except ValueError:
+                continue
+            if resolved.is_file():
+                if resolved.suffix == ".tmdl" or _is_report_json(resolved):
+                    candidates.append(resolved)
+            elif resolved.is_dir():
+                for child in sorted(resolved.rglob("*")):
+                    if (
+                        child.is_file()
+                        and not _is_ignored(child, root_resolved)
+                        and (child.suffix == ".tmdl" or _is_report_json(child))
+                    ):
+                        candidates.append(child)
+        return candidates
+
+    for child in sorted(check_secrets.expand_targets([], root_resolved)):
+        if (
+            child.is_file()
+            and not _is_ignored(child, root_resolved)
+            and (child.suffix == ".tmdl" or _is_report_json(child))
+        ):
+            candidates.append(child)
+    return candidates
+
+
+def _is_binary(path: Path) -> bool:
+    import check_secrets
+
+    with path.open("rb") as handle:
+        head = handle.read(check_secrets.BINARY_SNIFF_BYTES)
+    return check_secrets.is_binary(path, head)
+
+
+def check_tmdl_text(text: str) -> list[tuple[int, str]]:
+    violations: list[tuple[int, str]] = []
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        if line.startswith(" ") and line.strip() and ALLOW_MARKER not in line:
+            violations.append(
+                (line_no, "Indentacao TMDL comecando com espaco; o Desktop grava com tab.")
+            )
+    return violations
+
+
+def _dict_has_allow_marker(mapping: dict[object, object]) -> bool:
+    return any(isinstance(val, str) and ALLOW_MARKER in val for val in mapping.values())
+
+
+def _detect_pii_kind(text: str) -> str | None:
+    if "@" in text and EMAIL_RE.search(text):
+        return "e-mail"
+    if CPF_FORMATTED_RE.search(text) or CPF_DIGITS_RE.search(text):
+        return "CPF"
+    return None
+
+
+def _scan_json_node(
+    node: object,
+    *,
+    in_filter: bool,
+    allowed: bool,
+    path_hint: str,
+    findings: list[str],
+    in_filter_block: bool = False,
+) -> None:
+    if isinstance(node, dict):
+        mapping = cast("dict[object, object]", node)
+        node_has_marker = in_filter and _dict_has_allow_marker(mapping)
+        node_is_filter_config = path_hint == "filterConfig" or path_hint.endswith(".filterConfig")
+        for key, value in mapping.items():
+            key_str = str(key)
+            if in_filter_block and key_str in ID_KEYS and isinstance(value, str):
+                # Identifiers generated by Power BI Desktop are not literals (D7).
+                continue
+            key_is_filter = "filter" in key_str.lower()
+            child_in_filter = in_filter or key_is_filter
+            child_allowed = False if key_is_filter else (allowed or node_has_marker)
+            child_in_filter_block = in_filter_block or (
+                node_is_filter_config and key_str == "filters" and isinstance(value, list)
+            )
+            next_hint = f"{path_hint}.{key_str}" if path_hint else key_str
+            _scan_json_node(
+                cast("object", value),
+                in_filter=child_in_filter,
+                allowed=child_allowed,
+                path_hint=next_hint,
+                findings=findings,
+                in_filter_block=child_in_filter_block,
+            )
+    elif isinstance(node, list):
+        items = cast("list[object]", node)
+        for idx, item in enumerate(items):
+            _scan_json_node(
+                item,
+                in_filter=in_filter,
+                allowed=allowed,
+                path_hint=f"{path_hint}[{idx}]",
+                findings=findings,
+                in_filter_block=in_filter_block,
+            )
+    elif isinstance(node, str) and in_filter and not allowed and ALLOW_MARKER not in node:
+        pii_kind = _detect_pii_kind(node)
+        if pii_kind is not None:
+            loc = path_hint or "filter"
+            findings.append(
+                f"Possivel literal de PII ({pii_kind}) em bloco de filtro JSON ({loc})."
+            )
+
+
+def check_report_json_text(text: str) -> list[str]:
+    try:
+        data = cast("object", json.loads(text))
+    except json.JSONDecodeError as exc:
+        return [f"JSON invalido na linha {exc.lineno}: {exc.msg}"]
+
+    findings: list[str] = []
+    _scan_json_node(data, in_filter=False, allowed=False, path_hint="", findings=findings)
+    return findings
+
+
+def check_paths(root: Path, paths: Iterable[Path] | None = None) -> list[str]:
+    messages: list[str] = []
+    for path in iter_target_files(root, paths):
+        if _is_binary(path):
+            continue
+        text = path.read_text(encoding="utf-8-sig")
+        try:
+            rel = path.resolve().relative_to(root.resolve()).as_posix()
+        except ValueError:
+            rel = path.as_posix()
+        if path.suffix == ".tmdl":
+            for line_no, reason in check_tmdl_text(text):
+                messages.append(f"{rel}:{line_no}: {reason}")
+        elif _is_report_json(path):
+            for reason in check_report_json_text(text):
+                messages.append(f"{rel}: {reason}")
+    return messages
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Valida indentacao TMDL e ausencia de PII em filtros JSON PBIP/PBIR."
+    )
+    parser.add_argument("paths", nargs="*", type=Path, help="Arquivos ou pastas alvo.")
+    parser.add_argument("--root", type=Path, default=None, help="Diretorio raiz do projeto.")
+    args = parser.parse_args(argv)
+    if not _runtime_found():
+        print(RUNTIME_MISSING, file=sys.stderr)
+        return 1
+
+    root = find_root(args.root)
+    violations = check_paths(root, args.paths or None)
+    if violations:
+        for item in violations:
+            print(f"[pbip-sanity] {item}", file=sys.stderr)
+        return 1
+    print("PBIP SANITY CHECK PASSED")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

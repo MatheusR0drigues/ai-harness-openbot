@@ -1,0 +1,35 @@
+# ADR-0023: Listagem de candidatos dos scanners pelo git
+
+- Date: 2026-11-18
+- Status: Accepted
+
+## Context
+
+Sem argumentos, os scanners varriam o disco. `check_secrets`, `check_untrusted` e `check_code_risks` usavam `os.walk` com `EXCLUDED_DIRS`, e os scripts dos packs (`check_spark_antipatterns`, `check_pbip_sanity`) usavam a própria busca com `IGNORE_DIRS`. Arquivos ignorados pelo git (notas locais, dumps, pastas de trabalho) eram lidos e reprovavam o gate nos repositórios adotantes, embora nunca entrassem em commit. Nos scanners do núcleo, Arquivo binário só era reconhecido por um byte NUL nos primeiros 1024 bytes, então PDFs e outros formatos compactados eram lidos como texto. Os scripts dos packs não tinham regra de binário: liam o arquivo inteiro e reprovavam com erro de análise quando havia NUL.
+
+O `check_pbip_sanity` testava todo texto dentro de qualquer chave com `filter`. Os identificadores `name` que o Power BI Desktop gera em `filterConfig.filters` (20 caracteres hexadecimais, às vezes com 11 dígitos) eram acusados como CPF. O `verify.py` imprimia com a codificação do console; num console `cp1252`, um caractere como `\u2713` na saída de um gate levantava `UnicodeEncodeError` e escondia o relatório.
+
+## Decision
+
+Os scanners passam a examinar, sem argumentos, a Listagem de candidatos do git, com fallback para o disco.
+
+1. **Listagem de candidatos.** `candidate_files(root)` em `scripts/harness/check_secrets.py` roda, só quando `root/.git` existe, `["git", "-c", "core.fsmonitor=false", "-C", <root>, "ls-files", "-z", "--cached", "--others", "--exclude-standard"]` com `capture_output=True`, `timeout=GIT_TIMEOUT` (30 s), `check=False` e sem shell; o stderr é descartado. Cada entrada passa por `os.path.normpath` e só fica se resolve dentro de `root` e existe como arquivo, o que descarta `..`, link simbólico para fora e arquivo rastreado apagado. Código de saída diferente de `0`, `OSError` ou `SubprocessError` devolvem `None`. A listagem inclui `--others` porque um arquivo novo não ignorado entra no próximo commit (D4).
+2. **`core.fsmonitor=false` (D18).** `core.fsmonitor` em `.git/config` executa um comando durante `ls-files`. A sobrescrita `-c core.fsmonitor=false` vale só para a invocação, não altera `git config` e também foi aplicada a `git_tracked_files` (`ls-files -z --cached`).
+3. **Fallback e caminho explícito.** `expand_targets(args, root)` sem argumentos usa `candidate_files` e, com `None`, cai em `iter_repo_files` (`os.walk` com `EXCLUDED_DIRS`), o comportamento anterior. Com argumentos, nada muda: um diretório explícito é varrido por `iter_repo_files`. `check_secrets.main` passa `explicit=True` a `scan_files` quando há argumentos, e então um arquivo ignorado e não rastreado também é examinado. `check_untrusted.py` e `check_code_risks.py` usam `check_secrets.expand_targets` também sem argumentos, com os filtros próprios (`include`, `exempt_paths`) aplicados por cima.
+4. **Arquivo binário (D13).** `is_binary(path, head)` reconhece o sufixo, sem diferença de caixa, em `BINARY_SUFFIXES` (`.pdf`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.zip`, `.abf`, `.xlsx`, `.parquet`, `.pbix`, `.pbit`, `.docx`, `.pptx`, `.webp`, `.ico`) ou um NUL nos primeiros `BINARY_SNIFF_BYTES = 8192` bytes. `read_text_file` devolve `None` para Arquivo binário e mantém o limite `MAX_FILE_BYTES`.
+5. **Cópia compartilhada.** `plugin/scripts/check_secrets.py` continua cópia byte a byte de `scripts/harness/check_secrets.py`. A paridade é cobrada pelo `check_structure` (`SHARED_SCRIPTS`).
+6. **Packs (D10).** `check_spark_antipatterns.py` e `check_pbip_sanity.py` calculam `HARNESS_DIR = Path(__file__).resolve().parents[4] / "scripts" / "harness"` (de `harness/packs/<pack>/scripts/<script>.py` até a raiz). Quando a pasta ainda não está em `sys.path`, eles a inserem e importam `check_secrets`. Se o import falhar, saem com código 1 e `harness runtime not found (scripts/harness/check_secrets.py)`. Sem caminhos explícitos, usam `check_secrets.expand_targets([], root)` com o filtro de sufixo e `IGNORE_DIRS` por cima; com caminhos explícitos, o comportamento anterior se mantém. Arquivo binário é pulado por `check_secrets.is_binary` antes da leitura com `utf-8-sig`, que preserva a decodificação estrita dos packs. Em `tests/harness/test_security_fitness.py`, `local_modules` permite aos scripts de pack importar de `scripts/harness/` só `check_secrets`; `tools/` continua podendo importar todos os módulos de `scripts/harness/`.
+7. **Chaves de identificação no `check_pbip_sanity` (D7).** `_scan_json_node` ganha `in_filter_block`, verdadeiro a partir da lista `filters` filha de `filterConfig` e propagado a cada item, em qualquer profundidade. Dentro do Bloco de filtro, valor `str` direto de chave em `ID_KEYS = {"name", "queryRef", "nativeQueryRef"}` não passa pela detecção de PII. Valor objeto ou lista dessas chaves continua sendo percorrido. `CPF_DIGITS_RE` não muda, literais (`Literal.Value`, listas `Values`) continuam verificados e `name` fora de Bloco de filtro continua reportado.
+8. **Saída do `verify.py`.** `_escape_unencodable_output()`, chamado no início de `main()`, executa `reconfigure(errors="backslashreplace")` em `sys.stdout` e `sys.stderr` quando o método existe. A codificação do console e o código de saída não mudam. A chamada fica em `main()`, e não em `scripts/harness/cli.py`, porque `cli.py` é editado só pelo humano (ADR-0009); assim `cli.py verify` tem o mesmo comportamento.
+
+## Consequences
+
+- Arquivos ignorados pelo git deixam de ser examinados pelos cinco scanners quando rodam sem argumentos. Aceito porque arquivo ignorado não entra em commit nem em PR. Diretivas em arquivo ignorado deixam de ser acusadas pelo `check_untrusted`, e a regra de tratar conteúdo lido como dado continua valendo para o agente.
+- Arquivo sensível rastreado continua reprovado (`sensitive-file-tracked`, via `git_tracked_files`). Arquivo novo não ignorado continua examinado, e caminho explícito é examinado mesmo se estiver no `.gitignore`.
+- Sem `.git`, sem `git` no `PATH`, com erro do git ou depois de 30 s, os scanners varrem o disco como antes, sem imprimir o stderr do git.
+- `check_controls.count_markers` e `verify.has_matching_file` continuam com `os.walk`. A contagem de marcadores por disco é mais restrita, e reduzi-la exigiria outra ADR.
+- Arquivo com extensão de texto e NUL só depois de 8192 bytes continua sendo lido. Formato binário fora da lista (por exemplo `.exe` ou `.dll`) só é pulado se tiver NUL na janela.
+- Os scripts de pack passam a depender de `scripts/harness/check_secrets.py`, que o `init` projeta junto. Um pack copiado sem o runtime falha com código 1 em vez de passar.
+- Filtros fora de `filterConfig.filters` (por exemplo `explorationState` de bookmarks) podem manter falso positivo de CPF.
+- Num console `cp1252`, caracteres fora da página de código aparecem como `\uXXXX` ou `\UXXXXXXXX`.
+- Toda mudança em `scripts/harness/check_secrets.py` exige a mesma mudança em `plugin/scripts/check_secrets.py` no mesmo conjunto de mudanças.

@@ -1,0 +1,39 @@
+# Python caches & virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+
+# Credentials, secrets & local overrides (never commit; document in .env.example)
+.env
+.env.*
+!.env.example
+*.credentials.json
+oauth_creds.json
+google_accounts.json
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+
+# Personal, machine-local agent settings (may contain relaxed permissions)
+AGENTS.local.md
+settings.local.json
+*.local.json
+*.local.toml
+*.local.md
+
+# Local temporary working scratch
+.harness-work/
+
+# OS & editor artifacts
+.DS_Store
+Thumbs.db
+desktop.ini

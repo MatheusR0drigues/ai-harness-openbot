@@ -1,0 +1,6 @@
+# docs/links.txt - sites aprovados pelo humano para pesquisa do agente (pack research-guard).
+#
+# Uma entrada por linha: um host (example.org) ou uma URL com caminho (https://example.org/docs).
+# Uma entrada com host libera o host inteiro; uma entrada com caminho libera apenas aquele prefixo.
+# Linhas iniciadas por # são ignoradas. Lista vazia = toda pesquisa web é negada.
+# O agente nunca edita este arquivo sem confirmação explícita do humano.

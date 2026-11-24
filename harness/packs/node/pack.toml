@@ -1,0 +1,45 @@
+# Pack node: gates de stack para projetos Node.js com scripts npm.
+#
+# Habilite com `[packs] enabled = ["node"]` em harness.toml (ou `cli.py init --packs node`) e
+# garanta que package.json define os scripts `lint`, `typecheck` e `test`. Fixe as versoes das
+# ferramentas em devDependencies (save-exact) e versione o lockfile. Para pnpm ou yarn, declare
+# gates equivalentes com outros nomes em harness.toml.
+
+[pack]
+name = "node"
+description = "Gates e regras Node.js/TypeScript: lint, typecheck, testes e npm audit via scripts do package.json."
+rules = ["rules/node.md"]
+
+[[gates]]
+name = "node-lint"
+command = ["npm", "run", "lint"]
+hint = "Corrija os apontamentos de lint em arquivo:linha (ou rode o script de lint --fix do projeto); nao desative regras sem justificativa."
+group = "stack"
+fast = true
+timeout = 300
+requires_glob = "package.json"
+
+[[gates]]
+name = "node-types"
+command = ["npm", "run", "typecheck"]
+hint = "Corrija os erros de tipo em arquivo:linha; nada de `any` ou `@ts-ignore` sem motivo registrado."
+group = "stack"
+fast = true
+timeout = 300
+requires_glob = "package.json"
+
+[[gates]]
+name = "node-tests"
+command = ["npm", "test"]
+hint = "Corrija o codigo, nao o teste (a menos que o teste esteja errado); nunca use skip para passar."
+group = "stack"
+timeout = 900
+requires_glob = "package.json"
+
+[[gates]]
+name = "node-audit"
+command = ["npm", "audit", "--audit-level=high"]
+hint = "Atualize a dependencia vulneravel para uma versao corrigida com pin exato e versione o lockfile. Precisa de rede; nunca pule este gate."
+group = "stack"
+timeout = 300
+requires_glob = "package.json"

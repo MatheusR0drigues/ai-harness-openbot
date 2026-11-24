@@ -1,0 +1,13 @@
+[pack]
+name = "data-engineering"
+description = "Pipelines Spark/Delta, Lakeflow/Medallion, Data Contracts e deteccao de antipadroes PySpark."
+rules = ["rules/data-engineering.md"]
+
+[[gates]]
+name = "spark-antipatterns"
+command = ["python", "harness/packs/data-engineering/scripts/check_spark_antipatterns.py"]
+hint = "Elimine .toPandas()/.collect() sem .limit() e prefira funcoes nativas ou @pandas_udf em vez de @udf."
+group = "stack"
+fast = true
+timeout = 120
+requires_glob = "**/*.py"

@@ -1,0 +1,72 @@
+# Pack python: gates de stack para projetos Python gerenciados com uv.
+#
+# Habilite com `[packs] enabled = ["python"]` em harness.toml (ou `cli.py init --packs python`)
+# e declare as ferramentas como dependencias de dev com pin exato:
+#   uv add --dev ruff==<versao> pyright==<versao> pytest==<versao> pip-audit==<versao>
+# Configure `typeCheckingMode = "strict"` em [tool.pyright] do pyproject.toml do projeto.
+# Os scripts deste pack sao stdlib-only e rodam a partir da raiz do repositorio.
+
+[pack]
+name = "python"
+description = "Gates e regras Python: ruff, pyright strict, pytest, pip-audit e analisadores AST de determinismo e comentarios."
+rules = ["rules/python.md"]
+
+[[gates]]
+name = "py-format"
+command = ["uv", "run", "ruff", "format", "--check", "."]
+hint = "Execute `uv run ruff format .` e revise o diff antes de seguir."
+group = "stack"
+fast = true
+timeout = 120
+requires_glob = "**/*.py"
+
+[[gates]]
+name = "py-lint"
+command = ["uv", "run", "ruff", "check", "."]
+hint = "Execute `uv run ruff check --fix .` e corrija o restante em arquivo:linha, sem `noqa` sem justificativa."
+group = "stack"
+fast = true
+timeout = 120
+requires_glob = "**/*.py"
+
+[[gates]]
+name = "py-types"
+command = ["uv", "run", "pyright"]
+hint = "Corrija os erros de tipagem em arquivo:linha com anotacoes precisas; `Any`, `cast` e `type: ignore` so com justificativa no comentario."
+group = "stack"
+timeout = 300
+requires_glob = "**/*.py"
+
+[[gates]]
+name = "py-tests"
+command = ["uv", "run", "pytest"]
+hint = "Corrija o codigo, nao o teste (a menos que o teste esteja errado); nunca use skip ou afrouxe assercoes para passar."
+group = "stack"
+timeout = 900
+requires_glob = "**/test_*.py"
+
+[[gates]]
+name = "py-audit"
+command = ["python", "harness/packs/python/scripts/audit_deps.py"]
+hint = "Atualize a dependencia vulneravel para uma versao corrigida com pin exato e rode `uv lock`. Precisa de rede; nunca pule este gate."
+group = "stack"
+timeout = 600
+requires_glob = "uv.lock"
+
+[[gates]]
+name = "py-determinism"
+command = ["python", "harness/packs/python/scripts/check_test_determinism.py"]
+hint = "Injete relogio, agendador e sondador de processos falsos nos testes em vez de usar datetime.now, time.time, time.sleep ou psutil."
+group = "stack"
+fast = true
+timeout = 120
+requires_glob = "tests/**/*.py"
+
+[[gates]]
+name = "py-comments"
+command = ["python", "harness/packs/python/scripts/verificar_comentarios.py"]
+hint = "Reescreva o comentario no presente: sem datas, numeros de celula, molduras, historico de versoes ou rotulos de patch. Ajuste o escopo em [comments] de harness.toml."
+group = "stack"
+fast = true
+timeout = 120
+requires_glob = "**/*.py"

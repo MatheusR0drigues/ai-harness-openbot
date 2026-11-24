@@ -1,0 +1,71 @@
+# harness.toml - configuracao do repositorio canonico ai-harness.
+
+[project]
+name = "ai-harness"
+
+[packs]
+enabled = []
+
+[secrets]
+extra_patterns = []
+exempt_paths = []
+safe_values = []
+
+[untrusted]
+include = []
+exempt_paths = []
+
+[code_risks]
+include = [
+    "scripts/**",
+    "harness/packs/**",
+    "workflows/**",
+]
+exempt_paths = []
+
+[comments]
+include = [
+    "scripts/**",
+    "harness/packs/**",
+    "tests/**",
+]
+exempt_paths = [
+    "tests/fixtures/",
+]
+
+[[gates]]
+name = "ruff-format"
+command = ["python", "-m", "ruff", "format", "--check", "."]
+hint = "Execute `uv run ruff format .` para formatar os arquivos."
+group = "harness"
+fast = true
+timeout = 120
+
+[[gates]]
+name = "ruff-lint"
+command = ["python", "-m", "ruff", "check", "."]
+hint = "Execute `uv run ruff check --fix .` e corrija as ocorrencias restantes."
+group = "harness"
+fast = true
+timeout = 120
+
+[[gates]]
+name = "pyright"
+command = ["python", "-m", "pyright"]
+hint = "Corrija os erros de tipagem estrita em arquivo:linha sem usar `Any` sem justificativa."
+group = "harness"
+timeout = 300
+
+[[gates]]
+name = "pytest"
+command = ["python", "-m", "pytest"]
+hint = "Corrija o codigo ou o teste defeituoso sem afrouxar assercoes ou marcar skip."
+group = "harness"
+timeout = 600
+[[gates]]
+name = "test-determinism"
+command = ["python", "harness/packs/python/scripts/check_test_determinism.py"]
+hint = "Troque relogio real, sleep ou processos reais por fixtures injetadas (tmp_path, fakes) sem afrouxar assercoes."
+group = "harness"
+fast = true
+timeout = 120

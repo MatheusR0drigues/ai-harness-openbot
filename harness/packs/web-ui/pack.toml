@@ -1,0 +1,9 @@
+# Pack web-ui: regras de UI/UX, acessibilidade (WCAG 2.2 AA) e performance para interfaces web.
+#
+# Habilite com `[packs] enabled = ["web-ui"]` em harness.toml (ou `cli.py init --packs web-ui`).
+# Este pack nao declara gates: os testes e linters do front-end vem do pack node ou do projeto.
+
+[pack]
+name = "web-ui"
+description = "Regras de UI/UX para HTML, CSS e componentes: hierarquia, acessibilidade WCAG 2.2 AA e Core Web Vitals."
+rules = ["rules/ui_ux_design.md"]

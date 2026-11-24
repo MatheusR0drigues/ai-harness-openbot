@@ -1,0 +1,56 @@
+[project]
+name = "ai-harness"
+version = "0.3.0"
+description = "OpenBot hookless personal engineering harness (derived from ai-harness)"
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+# Used only to test, lint and type-check the harness itself. Runtime hooks and gates are stdlib-only.
+dev = [
+    "pyright==1.1.414",
+    "pytest==9.1.1",
+    "ruff==0.16.10",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = ["raw", ".venv", "__pycache__"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# cli.py must parse on old Pythons to print a clear "Python 3.11+ required" message.
+"scripts/harness/cli.py" = ["UP"]
+"plugin/scripts/*" = ["UP"]
+
+[tool.pyright]
+include = ["scripts", "harness/packs", "tests", "workflows"]
+exclude = ["**/__pycache__", ".venv", "raw"]
+typeCheckingMode = "strict"
+pythonVersion = "3.11"
+venvPath = "."
+venv = ".venv"
+extraPaths = [
+    "scripts/harness",
+    "harness/packs/python/scripts",
+    "harness/packs/research-guard/scripts",
+    "tests/harness",
+    "workflows",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [
+    "scripts/harness",
+    "harness/packs/python/scripts",
+    "harness/packs/research-guard/scripts",
+    "tests/harness",
+    "workflows",
+]
+addopts = "-q"

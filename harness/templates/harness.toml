@@ -1,0 +1,28 @@
+# harness.toml - configuracao do projeto para o harness OpenBot.
+#
+# Edite este arquivo (ou use a skill `harness-setup`) para configurar packs e gates do projeto.
+# Os controles e gates obrigatorios de base vivem em harness/core.toml (nunca enfraqueca o baseline).
+
+[project]
+name = "projeto-sem-nome"
+
+[packs]
+# Valores opt-in suportados: "python", "node", "web-ui", "research-guard", "data-engineering", "bi-pbip"
+enabled = []
+
+[secrets]
+extra_patterns = []
+exempt_paths = []
+safe_values = []
+
+[untrusted]
+include = []
+exempt_paths = []
+
+[code_risks]
+include = []
+exempt_paths = []
+
+[comments]
+include = ["src/**", "tests/**"]
+exempt_paths = ["tests/fixtures/"]

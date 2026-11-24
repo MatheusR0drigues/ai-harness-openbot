@@ -1,0 +1,9 @@
+# Pack research-guard: pesquisa externa restrita a docs/ e aos sites em docs/links.txt.
+#
+# No modo hookless OpenBot, habilite com `cli.py init --packs research-guard` para
+# projetar a regra research-policy.md em .agents/rules/ e o seed docs/links.txt.
+
+[pack]
+name = "research-guard"
+description = "Política de pesquisa OpenBot que restringe busca e leitura web a docs/ e aos sites de docs/links.txt."
+rules = ["rules/research-policy.md"]
