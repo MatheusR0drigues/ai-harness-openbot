@@ -42,7 +42,7 @@ Essa separação evita que hooks de código rodem em workspaces sem `scripts/har
 
 ### 1. Sincronizar o Repositório Compartilhado (`/data/OpenBot/Shared/ai-harness-openbot`)
 
-No ambiente **OpenBot**, sincronize esta árvore exportada em `/data/OpenBot/Shared/ai-harness-openbot` como referência compartilhada única de regras, 27 skills (incluindo `verify-app`), 9 subagentes (`.agents/agents/` e `plugin/agents/`), kit local (`scripts/harness/`) e orquestrador DAG (`workflows/spec_dag_runner.py`).
+No ambiente **OpenBot**, sincronize esta árvore exportada em `/data/OpenBot/Shared/ai-harness-openbot` como referência compartilhada única de regras, 27 skills (incluindo `verify-app`), 9 subagentes (`.agents/agents/`, `plugin/agents/` e `claude/agents/` para runtime Claude Code), kit local (`scripts/harness/`) e orquestrador DAG (`workflows/spec_dag_runner.py`).
 
 ### 2. Instalar o Kit Local em outro repositório (`cli.py init`)
 

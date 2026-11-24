@@ -175,3 +175,33 @@ def test_spec_dag_runner_rejects_cyclic_tasks(tmp_path: Path) -> None:
     )
     assert proc.returncode == 1
     assert "DAG ERROR" in proc.stderr
+
+
+def test_claude_agents_exist_with_claude_code_tools() -> None:
+    claude_agents_dir = REPO_ROOT / "claude" / "agents"
+    assert claude_agents_dir.is_dir()
+    agent_files = sorted(claude_agents_dir.glob("*.md"))
+    assert len(agent_files) == 9
+    forbidden_tools = (
+        "read_file",
+        "run_command",
+        "edit_file",
+        "write_file",
+        "manage_task",
+        "search_web",
+    )
+    for path in agent_files:
+        text = path.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        assert lines and lines[0].strip() == "---"
+        end = lines.index("---", 1)
+        frontmatter = "\n".join(lines[1:end])
+        assert f"name: {path.stem}" in frontmatter
+        assert "description:" in frontmatter
+        assert "model:" in frontmatter
+        assert "tools:" in frontmatter
+        assert "subagent:" not in frontmatter
+        assert "mainAgent:" not in frontmatter
+        assert "workspace:" not in frontmatter
+        for bad_tool in forbidden_tools:
+            assert bad_tool not in text

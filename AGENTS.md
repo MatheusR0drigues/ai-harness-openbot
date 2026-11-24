@@ -27,6 +27,7 @@ Modo **hookless / CI-first**: `1 Gerente por repositório`, sem hooks locais; a 
 ## Topologia do Repositório
 
 - `.agents/rules/`, `.agents/skills/`, `.agents/agents/`: espelho operacional OpenBot.
+- `claude/agents/`: 9 subagentes com `tools` no vocabulário Claude Code para symlink em `/data/.claude/agents/`.
 - `plugin/`: pacote distribuível de regras, 27 skills, 9 subagentes e scripts.
 - `scripts/harness/`: runtime `stdlib-only` (`dialect.py` hookless, `dag_runner.py`, `verify.py`, `init.py`, `doctor.py`, `check_tamper.py`).
 - `workflows/spec_dag_runner.py`: entrypoint `run_workflow` para ondas topológicas.
