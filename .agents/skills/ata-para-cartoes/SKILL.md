@@ -32,7 +32,7 @@ Extraia apenas itens acionáveis concretos (decisões que viram entrega, pendên
 ## Integração com Trello
 
 - Quando a skill `trello-use` estiver disponível na sessão, carregue-a **antes** de chamar qualquer ferramenta MCP do Trello (`trelloRead*`, `trelloWrite*`, `trelloSearch`), respeitando o formato de ARI IDs, fuso UTC e criação ordenada.
-- Antes de criar cartões em lote no board real, apresente um resumo curto da lista (título, lista destino, responsável e `due date` ou `sem prazo`) quando o usuário ainda não tiver confirmado o destino.
+- Antes de criar cartões no board real, apresente **sempre** um resumo curto (título, lista destino, responsável e `due date` ou `sem prazo`) e aguarde a validação explícita do usuário.
 
 ## Guardrails de Segurança (`LLM01` / `LLM02`)
 
