@@ -78,3 +78,9 @@ Quando não houver subagente disponível, ou a revisão precisar acontecer no me
 
 - Comece pelo resultado. Diga o que foi verificado (comandos executados e resultado) e o que não foi.
 - "O comando terminou sem erro" não prova que a meta foi atingida.
+
+## 10. Fluxo Git
+
+- Trabalhe sempre em worktree irmã dedicada (`../wt-<repo>-<slug>`, branch `feat|fix|chore/<slug>`), seguindo `git-worktree-flow`.
+- Faça commits livres na branch da worktree ao concluir tarefas relevantes ou fluxos com `verify --fast` verde; push na branch de feature também é livre.
+- Nunca edite, commite ou faça push direto em `main`/`master`. Peça permissão explícita para abrir o PR somente ao concluir a demanda.

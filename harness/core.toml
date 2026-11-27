@@ -20,7 +20,9 @@ required_guards = [
     "data_egress",
     "exfil_url",
     "subagent_routing",
+    "git_workflow",
     "harness_integrity",
+    "pr_confirmation",
 ]
 
 [[gates]]

@@ -5,8 +5,9 @@ Hookless OpenBot builds run CI verification instead; direct CLI invocation:
 reading the JSON payload from stdin.
 
 Events:
-  pre              PreToolUse: run all 7 guards; fail closed with `{"decision": "deny"}`
-                   on violations/errors; silent exit 0 on allowed calls (NEVER `allow`).
+  pre              PreToolUse: run all 9 deny guards (fail closed with `{"decision": "deny"}`
+                   on violations/errors) and confirm guards (`{"decision": "force_ask"}` on PR
+                   creation); silent exit 0 on allowed calls (NEVER `allow`).
   post             PostToolUse: clear transactional integrity snapshot and print `{}`.
   pre-invocation   PreInvocation: print `{}`.
   post-invocation  PostInvocation: print `{}`.
@@ -65,6 +66,7 @@ Guard = Callable[[Event], "str | None"]
 VerifyFn = Callable[[], tuple[bool, str]]
 NoticeFn = Callable[[], "str | None"]
 GUARDS: tuple[Guard, ...] = guards.ALL
+CONFIRM_GUARDS: tuple[Guard, ...] = guards.CONFIRM
 
 UNREADABLE_HINT = (
     "The harness blocks tool calls it cannot inspect. If this keeps happening, the agent's hook "
@@ -84,7 +86,16 @@ def block(reason: str) -> Response:
     return Response(0, json.dumps({"decision": "deny", "reason": reason}))
 
 
-def handle_pre(event: Event, active_guards: Sequence[Guard]) -> Response:
+def ask(reason: str) -> Response:
+    """OpenBot confirmation contract for gated actions such as PR creation."""
+    return Response(0, json.dumps({"decision": "force_ask", "reason": reason}))
+
+
+def handle_pre(
+    event: Event,
+    active_guards: Sequence[Guard],
+    confirm_guards: Sequence[Guard] = CONFIRM_GUARDS,
+) -> Response:
     for guard in active_guards:
         name = getattr(guard, "__name__", "guard")
         try:
@@ -93,6 +104,14 @@ def handle_pre(event: Event, active_guards: Sequence[Guard]) -> Response:
             return block(f"BLOCKED by harness: guard `{name}` failed ({exc}).")
         if reason:
             return block(f"BLOCKED by harness ({name}): {reason}")
+    for guard in confirm_guards:
+        name = getattr(guard, "__name__", "guard")
+        try:
+            reason = guard(event)
+        except Exception as exc:  # fail closed: a broken confirm guard must not allow through
+            return block(f"BLOCKED by harness: guard `{name}` failed ({exc}).")
+        if reason:
+            return ask(f"CONFIRMATION required ({name}): {reason}")
     return Response(0)
 
 
@@ -204,7 +223,7 @@ def _controls_notice(cfg: config.HarnessConfig) -> str | None:
             f"(check_controls.py failed to import: {type(exc).__name__}: {exc})."
         )
     try:
-        problems = check_controls.check(cfg, [g.__name__ for g in guards.ALL])
+        problems = check_controls.check(cfg, [g.__name__ for g in (*guards.ALL, *guards.CONFIRM)])
     except Exception as exc:
         return f"Harness: the controls baseline check failed ({type(exc).__name__}: {exc})."
     if not problems:
@@ -252,6 +271,7 @@ def run(
     raw: str,
     guards_seq: Sequence[Guard] = GUARDS,
     *,
+    confirm_guards_seq: Sequence[Guard] = CONFIRM_GUARDS,
     verify_fn: VerifyFn = fast_verify,
     state_dir: Path = STATE_DIR,
     notice_fn: NoticeFn = default_config_notice,
@@ -280,7 +300,7 @@ def run(
             )
         return handle_post(event)
     if event.event == "pre":
-        return handle_pre(event, guards_seq)
+        return handle_pre(event, guards_seq, confirm_guards_seq)
     if event.event == "stop":
         return handle_stop(event, verify_fn, state_dir, tamper_fn)
     if event.event in ("pre-invocation", "post-invocation"):

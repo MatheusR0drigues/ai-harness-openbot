@@ -67,8 +67,57 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _build_mark_pr_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Record PR_PENDING_APPROVAL or PR_OPENED status in harness_tasks."
+    )
+    parser.add_argument("--db", type=Path, required=True, help="SQLite state database path")
+    parser.add_argument("--task-id", required=True, help="Task identifier")
+    parser.add_argument("--feature", required=True, help="Feature slug")
+    parser.add_argument(
+        "--status",
+        required=True,
+        choices=("PR_PENDING_APPROVAL", "PR_OPENED"),
+        help="PR workflow status",
+    )
+    parser.add_argument("--pr-url", default="", help="Pull Request URL when opened")
+    parser.add_argument("--branch", default="", help="Feature branch name")
+    return parser
+
+
+def _run_mark_pr(argv: Sequence[str]) -> int:
+    args = _build_mark_pr_parser().parse_args(list(argv))
+    dag_runner.init_tables(args.db)
+    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    dag_runner.upsert_task(
+        args.db,
+        task_id=args.task_id,
+        feature=args.feature,
+        tier="tier-2",
+        worktree=str(_REPO_ROOT),
+        branch=args.branch,
+        status=args.status,
+        pr_url=args.pr_url,
+        updated_at=now,
+    )
+    print(
+        json.dumps(
+            {
+                "task_id": args.task_id,
+                "feature": args.feature,
+                "status": args.status,
+                "pr_url": args.pr_url,
+            }
+        )
+    )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _build_parser().parse_args(list(argv) if argv is not None else None)
+    arg_list = list(sys.argv[1:] if argv is None else argv)
+    if arg_list and arg_list[0] == "mark-pr":
+        return _run_mark_pr(arg_list[1:])
+    args = _build_parser().parse_args(arg_list)
     tasks_path: Path = args.tasks.resolve()
     feature: str = args.feature.strip() or tasks_path.parent.name or "default"
 

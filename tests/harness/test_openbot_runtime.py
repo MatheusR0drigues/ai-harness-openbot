@@ -205,3 +205,31 @@ def test_claude_agents_exist_with_claude_code_tools() -> None:
         assert "workspace:" not in frontmatter
         for bad_tool in forbidden_tools:
             assert bad_tool not in text
+
+
+def test_spec_dag_runner_mark_pr_records_pr_statuses(tmp_path: Path) -> None:
+    db_path = tmp_path / "harness.db"
+    pending = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "workflows" / "spec_dag_runner.py"),
+            "mark-pr",
+            "--db",
+            str(db_path),
+            "--task-id",
+            "pr-1",
+            "--feature",
+            "demo",
+            "--status",
+            "PR_PENDING_APPROVAL",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert pending.returncode == 0, pending.stderr
+    rows = dag_runner.list_tasks(db_path, feature="demo")
+    assert len(rows) == 1
+    assert rows[0]["status"] == "PR_PENDING_APPROVAL"

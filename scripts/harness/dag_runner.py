@@ -380,6 +380,9 @@ def init_tables(db_path: Path) -> None:
         )
 
 
+PR_STATUSES = ("PR_PENDING_APPROVAL", "PR_OPENED")
+
+
 def upsert_task(
     db_path: Path,
     *,
@@ -392,7 +395,7 @@ def upsert_task(
     pr_url: str = "",
     updated_at: str,
 ) -> None:
-    """Insert or update a task row in `harness_tasks` using bound SQL parameters."""
+    """Insert or update a task row in `harness_tasks` (supports PR_PENDING_APPROVAL/PR_OPENED)."""
     with contextlib.closing(sqlite3.connect(db_path)) as conn, conn:
         conn.execute(
             """

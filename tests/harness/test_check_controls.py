@@ -197,7 +197,7 @@ def test_invalid_config_is_reported_instead_of_crashing(
 def test_repository_baseline_covers_every_guard() -> None:
     declared = set(config.load().controls.required_guards)
 
-    assert declared == {guard.__name__ for guard in guards.ALL}
+    assert declared == {guard.__name__ for guard in (*guards.ALL, *guards.CONFIRM)}
 
 
 def test_repository_controls_are_intact() -> None:

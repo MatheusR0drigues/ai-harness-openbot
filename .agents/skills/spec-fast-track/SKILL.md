@@ -38,6 +38,7 @@ Se qualquer item falhar, promova imediatamente para `../spec-driven/SKILL.md` (T
 4. **Verificação rápida e fechamento:**
    - Execute os testes direcionados à mudança e o sensor rápido (`uv run python scripts/harness/verify.py --fast` ou equivalente do projeto).
    - Revise `git diff --stat` e o diff alterado garantindo zero código morto, zero comentários temporais e nenhum arquivo fora do escopo.
+   - Faça `git commit` na branch da worktree após o `verify --fast` verde; ao encerrar a demanda, faça push da branch e peça permissão explícita antes de abrir o PR.
    - Não é obrigatório acionar `code-reviewer` ou `security-auditor` em Tier 1 puro, salvo dúvida objetiva do autor ou risco percebido.
 
 ## Critério de Pronto (Tier 1)
@@ -48,5 +49,6 @@ Se qualquer item falhar, promova imediatamente para `../spec-driven/SKILL.md` (T
 
 ## Orquestração OpenBot (`start_task`, `git worktree` e `run_workflow`)
 
-- Isole cada execução em `git worktree` dedicada (`../wt-<feature>`) via `start_task` (mantendo `1 Gerente por repositório`).
+- Isole cada execução em `git worktree` dedicada (`../wt-<repo>-<slug>`) via `start_task` (mantendo `1 Gerente por repositório`); nunca edite no checkout principal nem em `main`/`master`.
+- Commits por tarefa concluída e push em branch de feature são livres; para abrir PR ao fim da demanda, execute `pr_via_rest_api.py --request-approval`, marque `PR_PENDING_APPROVAL` via `workflows/spec_dag_runner.py mark-pr` e aguarde aprovação explícita.
 - Em ondas Topológicas Nível 2, acione `run_workflow` executando `workflows/spec_dag_runner.py` (`python workflows/spec_dag_runner.py --tasks specs/<feature>/tasks.md --feature <feature>`), que coordena `dag_runner.py` e persiste estado e vereditos vinculados a `commit_sha` nas tabelas SQLite `harness_tasks` e `harness_verdicts`.

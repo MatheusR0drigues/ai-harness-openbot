@@ -72,9 +72,9 @@ Você atua como coordenador: delega aos subagentes, grava os documentos, executa
 - Delegue ao `implementer` em `Model="flash"` uma tarefa por vez, em ordem, com as dependências concluídas.
 - Se `verify --fast` falhar 1 vez no modelo leve, escale a 2ª tentativa para `Model="inherit"` (`pro`) levando o erro do sensor; na 2ª falha consecutiva da mesma abordagem, pare pelo ciclo anti-loop, registre em `progress.md` e mude a estratégia ou pergunte ao usuário.
 - Entre tarefas: `python scripts/harness/verify.py --fast` verde antes de seguir (sem kit local, os testes e lint rápidos do projeto).
-- Ao fim de cada tarefa, marque-a como `[x]` em `tasks.md` e atualize o bloco ativo de `progress.md` (paginação: mantenha o estado atual enxuto no topo).
+- Ao fim de cada tarefa, marque-a como `[x]` em `tasks.md`, atualize o bloco ativo de `progress.md` (paginação: mantenha o estado atual enxuto no topo) e faça `git commit` na branch da worktree após `verify --fast` verde.
 - Após a última tarefa: `python scripts/harness/verify.py` completo, `git diff --stat` relido e skill `review` com o `code-reviewer` em contexto novo, mais `security-auditor` se a mudança tocar autenticação, rede, entrada externa, segredos, permissões ou o harness.
-- **Gate 4:** `verify` completo verde, `VEREDITO: PASS` do revisor independente e aprovação do usuário para encerrar.
+- **Gate 4:** `verify` completo verde, `VEREDITO: PASS` do revisor independente e pedido explícito de permissão ao usuário antes de abrir o PR.
 
 ## Memória de Progresso
 
@@ -97,5 +97,6 @@ Você atua como coordenador: delega aos subagentes, grava os documentos, executa
 
 ## Orquestração OpenBot (`start_task`, `git worktree` e `run_workflow`)
 
-- Isole cada execução em `git worktree` dedicada (`../wt-<feature>`) via `start_task` (mantendo `1 Gerente por repositório`).
+- Isole cada execução em `git worktree` dedicada (`../wt-<repo>-<slug>`) via `start_task` (mantendo `1 Gerente por repositório`); nunca edite no checkout principal nem em `main`/`master`.
+- Commits por tarefa concluída e push em branch de feature são livres; para abrir PR ao fim da demanda, execute `pr_via_rest_api.py --request-approval`, marque `PR_PENDING_APPROVAL` via `workflows/spec_dag_runner.py mark-pr` e aguarde aprovação explícita.
 - Em ondas Topológicas Nível 2, acione `run_workflow` executando `workflows/spec_dag_runner.py` (`python workflows/spec_dag_runner.py --tasks specs/<feature>/tasks.md --feature <feature>`), que coordena `dag_runner.py` e persiste estado e vereditos vinculados a `commit_sha` nas tabelas SQLite `harness_tasks` e `harness_verdicts`.

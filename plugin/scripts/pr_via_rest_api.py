@@ -246,6 +246,46 @@ def create_pull_request(
     return cast("dict[str, object]", parsed)
 
 
+def format_approval_request(
+    *,
+    title: str,
+    base: str = DEFAULT_BASE,
+    head: str | None = None,
+    body: str = "",
+    repo_root: Path | None = None,
+    git_runner: GitRunner = _run_git,
+) -> str:
+    """Format a human PR approval request locally without credentials or network calls."""
+    root = (Path.cwd() if repo_root is None else repo_root).resolve()
+    clean_title = title.strip()
+    clean_base = base.strip()
+    if not clean_title:
+        raise PrError("--title must be a non-empty string")
+    if not clean_base:
+        raise PrError("--base must be a non-empty string")
+    clean_head = (
+        head.strip() if head is not None else detect_current_branch(root, git_runner=git_runner)
+    )
+    if not clean_head:
+        raise PrError("--head must be a non-empty string")
+
+    proc = git_runner(["log", f"{clean_base}..HEAD", "--oneline"], repo_root=root)
+    commits = (
+        proc.stdout.strip()
+        if proc.returncode == 0 and proc.stdout.strip()
+        else "(sem commits locais)"
+    )
+    body_block = body.strip() or "(sem descrição adicional)"
+    return (
+        "=== SOLICITACAO DE APROVACAO DE PR ===\n"
+        f"Titulo: {clean_title}\n"
+        f"Branches: {clean_base} <- {clean_head}\n"
+        f"Commits:\n{commits}\n"
+        f"Descricao:\n{body_block}\n"
+        "Acao: aguarde aprovação explícita do humano e informe --approved-by e --approval-ref."
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Create a GitHub Pull Request via REST API using git credential fill."
@@ -257,6 +297,21 @@ def _build_parser() -> argparse.ArgumentParser:
     body_group.add_argument("--body", default="", help="Pull Request description text")
     body_group.add_argument("--body-file", type=Path, default=None, help="file with PR description")
     parser.add_argument("--draft", action="store_true", help="create Pull Request as draft")
+    parser.add_argument(
+        "--request-approval",
+        action="store_true",
+        help="print PR approval request locally without network calls",
+    )
+    parser.add_argument(
+        "--approved-by",
+        default="",
+        help="human approver identifier required before opening PR",
+    )
+    parser.add_argument(
+        "--approval-ref",
+        default="",
+        help="approval message ID or link required before opening PR",
+    )
     parser.add_argument("--repo", default=None, help="GitHub repository slug (owner/repo)")
     parser.add_argument("--repo-root", type=Path, default=None, help="local git repository root")
     parser.add_argument("--host", default=DEFAULT_HOST, help="GitHub host (default: github.com)")
@@ -286,12 +341,43 @@ def main(
             print(f"ERROR: could not read --body-file: {exc}", file=sys.stderr)
             return 1
 
+    if args.request_approval:
+        try:
+            summary = format_approval_request(
+                title=args.title,
+                base=args.base,
+                head=args.head,
+                body=body_text,
+                repo_root=args.repo_root,
+                git_runner=git_runner,
+            )
+        except PrError as exc:
+            print(f"PR APPROVAL REQUEST FAILED: {exc}", file=sys.stderr)
+            return 1
+        print(summary)
+        return 0
+
+    approver = args.approved_by.strip()
+    approval_ref = args.approval_ref.strip()
+    if not approver or not approval_ref:
+        print(
+            "ERROR: --approved-by and --approval-ref are required to open a PR "
+            "(run with --request-approval first and wait for explicit human approval).",
+            file=sys.stderr,
+        )
+        return 2
+
+    approval_footer = f"Aprovado por {approver} ({approval_ref})"
+    final_body = (
+        f"{body_text.rstrip()}\n\n{approval_footer}" if body_text.strip() else approval_footer
+    )
+
     try:
         result = create_pull_request(
             title=args.title,
             base=args.base,
             head=args.head,
-            body=body_text,
+            body=final_body,
             draft=args.draft,
             repo=args.repo,
             repo_root=args.repo_root,

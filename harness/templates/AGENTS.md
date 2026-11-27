@@ -45,6 +45,7 @@ Em sistemas Unix onde `python` apontar para Python 2 ou não existir, utilize `p
 - **Evidência ou zero:** nunca declare conclusão, correção ou aprovação sem saída real de comando executado após a última edição ou referência exata `arquivo:linha`.
 - **Integridade de sensores:** nunca afrouxe asserções, marque `skip` ou edite guardas/testes apenas para forçar passagem verde.
 - **Segurança de código:** proibido `eval`/`exec`, desserialização com `pickle`, `shell=True` e TLS com `verify=False`.
+- **Git e PR:** trabalhe sempre em worktree dedicada (`../wt-<repo>-<slug>`), nunca no checkout principal nem em `main`/`master`; commit após tarefa com `verify --fast` verde e push em branch de feature são livres; abrir PR exige permissão explícita no fim da demanda.
 
 ## Comportamento do Agente
 

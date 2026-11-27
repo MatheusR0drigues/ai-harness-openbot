@@ -28,7 +28,7 @@ Modo **hookless / CI-first**: `1 Gerente por repositório`, sem hooks locais; a 
 
 - `.agents/rules/`, `.agents/skills/`, `.agents/agents/`: espelho operacional OpenBot.
 - `claude/agents/`: 9 subagentes com `tools` no vocabulário Claude Code para symlink em `/data/.claude/agents/`.
-- `plugin/`: pacote distribuível de regras, 29 skills, 9 subagentes e scripts.
+- `plugin/`: pacote distribuível de regras, 30 skills, 9 subagentes e scripts.
 - `scripts/harness/`: runtime `stdlib-only` (`dialect.py` hookless, `dag_runner.py`, `verify.py`, `init.py`, `doctor.py`, `check_tamper.py`).
 - `workflows/spec_dag_runner.py`: entrypoint `run_workflow` para ondas topológicas.
 - `harness/`: `core.toml`, `baseline.json`, `templates/` (inclui `harness-verify.yml`) e `packs/`.
@@ -39,7 +39,8 @@ Modo **hookless / CI-first**: `1 Gerente por repositório`, sem hooks locais; a 
 - **Zero credenciais hardcoded:** nunca exponha segredos ou PII em código, logs ou prompts.
 - **Evidência ou zero:** conclusão e vereditos exigem saída real executada após a última edição.
 - **Integridade dos sensores:** nunca desative ou contorne `verify.py`, `check_tamper.py`, `.github/workflows/harness-verify.yml` ou testes.
-- **Isolamento OpenBot:** `1 Gerente por repositório`; tarefas usam `start_task` em `git worktree` isolada (`../wt-<feature>`) e `harness/core.toml` é protegido.
+- **Isolamento OpenBot:** `1 Gerente por repositório`; toda edição e commit ocorrem em `git worktree` isolada (`../wt-<repo>-<slug>`), nunca no checkout principal nem em `main`/`master`; `harness/core.toml` é protegido.
+- **Fluxo Git:** commit após tarefa com `verify.py --fast` verde e push em branch de feature são livres; abrir PR exige `--request-approval`, aprovação explícita no canal e `mark-pr PR_PENDING_APPROVAL`.
 
 ## Comportamento do Agente
 

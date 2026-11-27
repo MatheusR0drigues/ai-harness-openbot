@@ -357,8 +357,54 @@ def _normalize_input_path(path: str) -> str:
     return _norm_win_segments(_strip_win32_device_prefix(path.replace("\\", "/")))
 
 
+def _resolve_git_dir(git_marker: Path, wt_root: Path) -> Path | None:
+    try:
+        lines = git_marker.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    if not lines:
+        return None
+    first_line = lines[0].strip()
+    if not first_line.startswith("gitdir:"):
+        return None
+    raw_gitdir = first_line[len("gitdir:") :].strip()
+    if not raw_gitdir:
+        return None
+    gitdir = Path(raw_gitdir)
+    if not gitdir.is_absolute():
+        gitdir = wt_root / gitdir
+    try:
+        return gitdir.resolve()
+    except OSError:
+        return None
+
+
+def _linked_worktree_root(resolved_candidate: Path, resolved_root: Path) -> Path | None:
+    """Return the worktree root if `resolved_candidate` is inside a worktree of `resolved_root`."""
+    try:
+        worktrees_dir = (resolved_root / ".git" / "worktrees").resolve()
+    except OSError:
+        return None
+    for ancestor in (resolved_candidate, *resolved_candidate.parents):
+        git_marker = ancestor / ".git"
+        try:
+            if git_marker.is_dir():
+                return None
+            if not git_marker.is_file():
+                continue
+        except OSError:
+            return None
+        resolved_gitdir = _resolve_git_dir(git_marker, ancestor)
+        if resolved_gitdir is None:
+            return None
+        if resolved_gitdir != worktrees_dir and resolved_gitdir.is_relative_to(worktrees_dir):
+            return ancestor
+        return None
+    return None
+
+
 def repo_relative(path: str, cwd: str, root: Path = REPO_ROOT) -> str | None:
-    """Return POSIX path relative to `root`, or None if outside the repository."""
+    """Return POSIX path relative to `root` (or linked worktree), or None if outside."""
     if not path:
         return None
     normalized = _normalize_input_path(path)
@@ -367,10 +413,22 @@ def repo_relative(path: str, cwd: str, root: Path = REPO_ROOT) -> str | None:
         base = _normalize_input_path(cwd) if cwd else ""
         candidate = Path(base or root) / candidate
     try:
-        rel = candidate.resolve().relative_to(root.resolve()).as_posix()
-    except (OSError, ValueError):
+        resolved_candidate = candidate.resolve()
+        resolved_root = root.resolve()
+    except OSError:
         return None
-    return _norm_win_segments(rel)
+    try:
+        rel = resolved_candidate.relative_to(resolved_root).as_posix()
+        return _norm_win_segments(rel)
+    except ValueError:
+        wt_root = _linked_worktree_root(resolved_candidate, resolved_root)
+        if wt_root is None:
+            return None
+        try:
+            rel = resolved_candidate.relative_to(wt_root.resolve()).as_posix()
+        except (OSError, ValueError):
+            return None
+        return _norm_win_segments(rel)
 
 
 def _norm_case(value: str) -> str:
@@ -2118,13 +2176,174 @@ def subagent_routing(event: Event, config_path: Path | None = None) -> str | Non
     return None
 
 
+_PROTECTED_BRANCHES = frozenset({"main", "master"})
+_GIT_PUSH_VALUE_OPTS = frozenset({"-o", "--push-option", "--repo", "--receive-pack", "--exec"})
+
+
+def _read_git_branch(git_dir: Path) -> str:
+    head_path = git_dir / "HEAD"
+    try:
+        head_text = head_path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return ""
+    prefix = "ref: refs/heads/"
+    if head_text.startswith(prefix):
+        return head_text[len(prefix) :].strip()
+    return ""
+
+
+def _worktree_info(path: Path) -> tuple[Path, bool, str] | None:
+    """Return `(wt_root, is_linked, branch)` for the enclosing git worktree, or None."""
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return None
+    for ancestor in (resolved, *resolved.parents):
+        git_marker = ancestor / ".git"
+        try:
+            if git_marker.is_dir():
+                return ancestor, False, _read_git_branch(git_marker)
+            if not git_marker.is_file():
+                continue
+        except OSError:
+            return None
+        resolved_gitdir = _resolve_git_dir(git_marker, ancestor)
+        if resolved_gitdir is None:
+            return None
+        return ancestor, True, _read_git_branch(resolved_gitdir)
+    return None
+
+
+def _is_protected_ref(ref: str) -> bool:
+    cleaned = ref.strip()
+    if cleaned.startswith("refs/heads/"):
+        cleaned = cleaned[len("refs/heads/") :]
+    return cleaned in _PROTECTED_BRANCHES
+
+
+def _push_positional_args(rest: Sequence[str]) -> list[str]:
+    positional: list[str] = []
+    idx = 0
+    stop_flags = False
+    while idx < len(rest):
+        tok = rest[idx]
+        if not stop_flags and tok == "--":
+            stop_flags = True
+            idx += 1
+            continue
+        if not stop_flags and tok in _GIT_PUSH_VALUE_OPTS and idx + 1 < len(rest):
+            idx += 2
+            continue
+        if not stop_flags and tok.startswith("-"):
+            idx += 1
+            continue
+        positional.append(tok)
+        idx += 1
+    return positional
+
+
+def _check_git_workflow_push(rest: Sequence[str], target_dir: Path) -> str | None:
+    positional = _push_positional_args(rest)
+    refspecs = positional[1:] if len(positional) >= 2 else []
+    info = _worktree_info(target_dir)
+
+    if len(positional) == 1 and _is_protected_ref(positional[0]):
+        return (
+            f"pushing `{positional[0]}` directly is blocked; push a feature branch from a "
+            "linked worktree."
+        )
+
+    for refspec in refspecs:
+        cleaned = refspec.lstrip("+")
+        if ":" in cleaned:
+            src, _, dst = cleaned.partition(":")
+            parts: tuple[str, ...] = (src, dst)
+        else:
+            parts = (cleaned,)
+        for part in parts:
+            if _is_protected_ref(part):
+                return (
+                    f"pushing to or from protected branch `{part}` is blocked; push a feature "
+                    "branch instead."
+                )
+        if parts[0] == "HEAD" and info is not None:
+            _, is_linked, branch = info
+            if not is_linked or branch in _PROTECTED_BRANCHES:
+                return (
+                    "pushing `HEAD` from the main checkout or a protected branch is blocked; "
+                    "switch to a feature branch in a linked worktree."
+                )
+
+    if not refspecs and info is not None:
+        _, is_linked, branch = info
+        if branch in _PROTECTED_BRANCHES:
+            return (
+                f"pushing from protected branch `{branch}` is blocked; switch to a feature "
+                "branch in a linked worktree."
+            )
+        if not is_linked:
+            return (
+                "pushing without an explicit feature branch from the main checkout is blocked; "
+                "work from a dedicated git worktree."
+            )
+    return None
+
+
+def git_workflow(event: Event, root: Path = REPO_ROOT) -> str | None:
+    """Guard 8: enforce linked git worktree isolation and protect main/master branches."""
+    if event.kind == "write":
+        for path in event.paths:
+            resolved = _resolved_str(path, event.cwd, root)
+            info = _worktree_info(Path(resolved))
+            if info is None:
+                continue
+            _, is_linked, branch = info
+            if not is_linked:
+                return (
+                    "edits must happen in a dedicated git worktree (`git worktree add "
+                    "../wt-<repo>-<slug> -b feat/<slug> main`); see skill git-worktree-flow."
+                )
+            if branch in _PROTECTED_BRANCHES:
+                return (
+                    f"edits on branch `{branch}` are blocked; switch to a feature branch in "
+                    "a linked worktree."
+                )
+    if event.kind == "shell" and event.command:
+        for seg in _parse_commands(event.command):
+            verb, args = _command_verb(seg.tokens)
+            if verb not in ("git", "git.exe"):
+                continue
+            sub, rest, git_cwd = _git_command(args, event.cwd, root)
+            target_dir = Path(_normalize_input_path(git_cwd))
+            if sub == "commit":
+                info = _worktree_info(target_dir)
+                if info is None:
+                    continue
+                _, is_linked, branch = info
+                if not is_linked:
+                    return (
+                        "commits must happen in a dedicated git worktree (`git worktree add "
+                        "../wt-<repo>-<slug> -b feat/<slug> main`), not the main checkout."
+                    )
+                if branch in _PROTECTED_BRANCHES:
+                    return (
+                        f"commits on branch `{branch}` are blocked; switch to a feature branch "
+                        "in a linked worktree."
+                    )
+            elif sub == "push":
+                reason = _check_git_workflow_push(rest, target_dir)
+                if reason:
+                    return reason
+    return None
+
+
 def harness_integrity(
     event: Event,
     root: Path = REPO_ROOT,
     state_dir: Path = cli.STATE_DIR,
     now: float | None = None,
 ) -> str | None:
-    """Guard 8: validate syntax on full writes, protect cli.py, and journal incremental edits."""
+    """Guard 9: validate syntax on full writes, protect cli.py, and journal incremental edits."""
     if event.kind == "write":
         cli_rel = _norm_case("scripts/harness/cli.py")
         resolved_inputs = [_resolved_str(p, event.cwd, root) for p in event.paths]
@@ -2172,6 +2391,51 @@ def harness_integrity(
     return None
 
 
+_PR_MCP_TOOL_SUBSTRINGS = ("create_pull_request", "open_pull_request", "create_pr")
+
+
+def pr_confirmation(event: Event) -> str | None:
+    """Confirm guard: require explicit human confirmation before creating a Pull Request."""
+    tool_lower = event.tool.lower()
+    if any(marker in tool_lower for marker in _PR_MCP_TOOL_SUBSTRINGS):
+        return (
+            f"opening a Pull Request via `{event.tool}` requires explicit human confirmation "
+            "at the end of the task."
+        )
+    if event.kind == "shell" and event.command:
+        for seg in _parse_commands(event.command):
+            verb, args = _command_verb(seg.tokens)
+            if not verb:
+                continue
+            verb_lower = verb.lower()
+            args_lower = tuple(a.lower() for a in args)
+            if verb_lower in ("gh", "gh.exe"):
+                positional = [a for a in args_lower if not a.startswith("-")]
+                if len(positional) >= 2 and positional[0] == "pr" and positional[1] == "create":
+                    return (
+                        "`gh pr create` opens a Pull Request; ask the human for explicit "
+                        "confirmation first."
+                    )
+            all_tokens = (verb_lower, *args_lower)
+            if (
+                any(tok.endswith("pr_via_rest_api.py") for tok in all_tokens)
+                and "--request-approval" not in args_lower
+            ):
+                return (
+                    "`pr_via_rest_api.py` opens a Pull Request; run with `--request-approval` "
+                    "or obtain explicit human confirmation first."
+                )
+            if (
+                any(tok.endswith("watch_worktree.py") for tok in all_tokens)
+                and "publish" in args_lower
+            ):
+                return (
+                    "`watch_worktree.py publish` pushes and opens a Draft PR; confirm with "
+                    "the human first."
+                )
+    return None
+
+
 ALL = (
     secret_in_write,
     sensitive_file,
@@ -2180,5 +2444,8 @@ ALL = (
     data_egress,
     exfil_url,
     subagent_routing,
+    git_workflow,
     harness_integrity,
 )
+
+CONFIRM = (pr_confirmation,)

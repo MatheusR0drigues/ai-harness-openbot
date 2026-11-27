@@ -118,6 +118,7 @@ SKILLS = (
     "verify-app",
     "pr-via-rest-api",
     "ata-para-cartoes",
+    "git-worktree-flow",
 )
 SUBAGENTS = (
     "researcher",
@@ -464,8 +465,8 @@ REGISTRY_TERMS: dict[str, tuple[str, ...]] = {
         "nunca é apagada",
     ),
     "6.4": (
-        "o humano aprova a entrada ao revisar o diff e commitar",
-        "o agente não commita sem pedido",
+        "o humano aprova a entrada ao revisar o diff no PR",
+        "não abra PR sem permissão explícita",
     ),
     "6.5": (REGISTRY_POINTER, f"`{REGISTRY_DEFAULT}` como padrão"),
     "6.6": (

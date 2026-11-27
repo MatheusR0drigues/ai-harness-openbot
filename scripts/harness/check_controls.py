@@ -108,7 +108,7 @@ def main(
     if not (cfg.controls.required_gates or cfg.controls.required_guards):
         print("WARNING: no controls baseline configured (see [controls] in harness/core.toml)")
         return 0
-    problems = check(cfg, [guard.__name__ for guard in guards.ALL])
+    problems = check(cfg, [guard.__name__ for guard in (*guards.ALL, *guards.CONFIRM)])
     if check_tamper.should_enforce_in_repo(root):
         problems.extend(check_tamper.verify(root))
     if problems:

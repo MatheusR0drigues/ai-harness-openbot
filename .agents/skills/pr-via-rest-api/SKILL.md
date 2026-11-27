@@ -17,15 +17,27 @@ Padroniza a criação de Pull Requests via HTTPS REST API usando o helper `stdli
 
 1. A branch de origem (`--head`) já deve existir no remoto `origin`.
 2. O helper `git credential fill` deve estar configurado para o host alvo (ex.: `github.com`).
-3. O usuário solicitou explicitamente a criação do PR (nunca faça push ou abra PR sem pedido explícito).
+3. O usuário aprovou explicitamente a abertura do PR: execute primeiro com `--request-approval` (sem chamadas de rede), registre `PR_PENDING_APPROVAL` na DAG quando aplicável e só execute a criação após receber `--approved-by` e `--approval-ref`.
 
 ## Como Executar
 
+1. **Solicitar aprovação (sem rede):**
+```bash
+python /data/OpenBot/Shared/ai-harness-openbot/plugin/scripts/pr_via_rest_api.py \
+  --request-approval \
+  --base main \
+  --title "feat: resumo objetivo da mudanca" \
+  --body "Contexto e verificacoes executadas."
+```
+
+2. **Abrir o PR após aprovação explícita:**
 ```bash
 python /data/OpenBot/Shared/ai-harness-openbot/plugin/scripts/pr_via_rest_api.py \
   --base main \
   --title "feat: resumo objetivo da mudanca" \
-  --body "Contexto e verificacoes executadas."
+  --body "Contexto e verificacoes executadas." \
+  --approved-by "<usuario>" \
+  --approval-ref "<id-ou-link-da-aprovacao>"
 ```
 
 Opções suportadas:

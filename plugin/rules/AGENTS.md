@@ -48,8 +48,8 @@ O `AGENTS.md` e as regras em `.agents/rules/` de cada repositório complementam 
 ## 7. Fluxo de Trabalho (3 Tiers) e Roteamento de Modelos
 
 - **Tier 0 (Micro):** typo, texto ou flag em 1–2 arquivos sem lógica nova -> edição direta + `verify --fast`.
-- **Tier 1 (Fast-Track — ~80% do dia a dia):** tarefa focalizada (até 3–5 arquivos, sem novo contrato externo, dependência ou risco de segurança) -> skill `spec-fast-track` inline no chat (zero arquivos em `specs/`), `verify --fast` e releitura de `git diff --stat`. Dispensa `code-reviewer` se os sensores passarem.
-- **Tier 2 (`spec-driven` completo):** feature, contrato/schema, arquitetura, `>5` arquivos ou superfície sensível (auth, rede, PII, segredos, harness) -> skill `spec-driven` (`Specify -> Design -> Tasks -> Implement`) em `specs/<feature>/`, `verify` completo e auditoria com `review` / `code-reviewer` (mais `security-auditor` quando aplicável). Quem escreveu a mudança nunca a avalia no mesmo contexto. Aprovado plano no modo de planejamento nativo (`/plan` ou Plan Mode), a primeira ação antes de editar arquivos é carregar a skill `spec-driven`, validar a pasta `specs/<feature>/` com `validate_spec.py` (`SPEC VALID`) e executar a fase `Implement` exclusivamente via `implementer` em ordem sequencial (1 tarefa por vez).
+- **Tier 1 (Fast-Track — ~80% do dia a dia):** tarefa focalizada (até 3–5 arquivos, sem novo contrato externo, dependência ou risco de segurança) -> skill `spec-fast-track` inline no chat (zero arquivos em `specs/`), commit na worktree após `verify --fast` e releitura de `git diff --stat`, pedindo permissão só para abrir o PR no fim. Dispensa `code-reviewer` se os sensores passarem.
+- **Tier 2 (`spec-driven` completo):** feature, contrato/schema, arquitetura, `>5` arquivos ou superfície sensível (auth, rede, PII, segredos, harness) -> skill `spec-driven` (`Specify -> Design -> Tasks -> Implement`) em `specs/<feature>/` com commit por tarefa concluída, `verify` completo e auditoria com `review` / `code-reviewer` (mais `security-auditor` quando aplicável) antes de pedir permissão para o PR. Quem escreveu a mudança nunca a avalia no mesmo contexto. Aprovado plano no modo de planejamento nativo (`/plan` ou Plan Mode), a primeira ação antes de editar arquivos é carregar a skill `spec-driven`, validar a pasta `specs/<feature>/` com `validate_spec.py` (`SPEC VALID`) e executar a fase `Implement` exclusivamente via `implementer` em ordem sequencial (1 tarefa por vez).
 - **Roteamento Hydrogen (`flash` / `flash_lite` vs. `inherit`):** use `flash` (ou `flash_lite`) por padrão no `researcher` e no `implementer` com escopo/design fechado. Se `verify --fast` falhar **1 vez**, escale a 2ª tentativa para `inherit`; na 2ª falha consecutiva, pare pelo Ciclo Anti-Loop.
 - **Bug, testes e setup:** bug usa `fix-bug` (regressão primeiro); testes usam `write-tests`; instalação/packs usa `harness-setup`.
 
@@ -62,7 +62,7 @@ O `AGENTS.md` e as regras em `.agents/rules/` de cada repositório complementam 
 ## 9. Configuração Privilegiada e Operações Irreversíveis
 
 - Alteração de `.github/workflows/harness-verify.yml`, `harness/core.toml`, servidores MCP ou arquivos em `/data/OpenBot/Shared/ai-harness-openbot` é decisão do humano: pergunte em vez de editar.
-- Sem `git push --force`, `git reset --hard`, `git clean -f`, `--no-verify` ou alteração de `git config`. Commit, push, deploy e exclusão de dados só com pedido explícito do usuário.
+- Sem `git push --force`, `git reset --hard`, `git clean -f`, `--no-verify` ou alteração de `git config`. Toda edição e commit ocorrem em worktree dedicada `../wt-<repo>-<slug>` (`feat|fix|chore/<slug>`), nunca no checkout principal nem em `main`/`master`; commit após tarefa relevante com `verify --fast` verde e push em branch de feature são livres. Abrir Pull Request (ao fim da demanda, após `verify` completo e `review` PASS em Tier 2), deploy e exclusão de dados exigem permissão explícita do usuário.
 - Nova dependência: versão exata fixada, pacote conhecido e mantido, e aviso ao usuário.
 
 ## 10. Convenções PT-BR
@@ -87,11 +87,11 @@ O `AGENTS.md` e as regras em `.agents/rules/` de cada repositório complementam 
 | Baseline de segurança de código e web | regra `security.md` | sempre |
 | Comportamento detalhado, Tiers, roteamento e contexto | regra `behavior.md` | sob demanda |
 | Convenções e Troféu de Testes | regra `testing.md` | ao editar testes |
-| Fluxos de entrega e auditoria | `spec-fast-track`, `spec-driven`, `review`, `fix-bug`, `write-tests`, `harness-setup`, `create-specialist` | skill |
+| Fluxos de entrega, Git e auditoria | `git-worktree-flow`, `spec-fast-track`, `spec-driven`, `review`, `fix-bug`, `write-tests`, `harness-setup`, `create-specialist` | skill |
 | Produtividade, dados, BI/dataviz, segurança e web | skills especializadas do plugin (descobertas por descrição) | skill |
 | Subagentes nativos | `researcher`, `planner`, `implementer`, `code-reviewer`, `security-auditor`, `databricks-architect`, `claude-architect`, `github-architect`, `powerbi-architect` | subagente |
 
 ## Runtime OpenBot (Hookless & CI-First)
 
-- **Gerente e worktrees:** mantenha `1 Gerente por repositório`; execute tarefas via `start_task` em `git worktree` isolada e orquestre ondas Tier 2 via `run_workflow`.
+- **Gerente e worktrees:** mantenha `1 Gerente por repositório`; execute tarefas via `start_task` em `git worktree` isolada (`../wt-<repo>-<slug>`), commite após tarefa verde e peça aprovação via `pr_via_rest_api.py --request-approval` + `mark-pr PR_PENDING_APPROVAL` antes de abrir PR.
 - **Trava determinística:** valide localmente com `verify.py` e no CI via `.github/workflows/harness-verify.yml`; referência compartilhada em `/data/OpenBot/Shared/ai-harness-openbot`.
