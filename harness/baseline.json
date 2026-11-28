@@ -12,7 +12,7 @@
     "scripts/harness/dag_runner.py": "a2c0c750bf5a0ca81599db1b5671ede3134454ceede929779de6cf9528a544ae",
     "scripts/harness/dialect.py": "810a026836ee4677eb742e7bf63ac86f2d0abbc3489a88288f8681d73fd067b7",
     "scripts/harness/doctor.py": "8b0a0e54a2da179d71e28ebfb835fdda91f9152e6f4620b073e32b8c9e2e534d",
-    "scripts/harness/guards.py": "b3689c53751cab55668fbcec4245e636afd4a64e308dfffa75a3ecbee77b41dd",
+    "scripts/harness/guards.py": "e4487b006a26677d303eb78af57291ff100793c78b7e4b64a956a771604e435f",
     "scripts/harness/hook.py": "5238613c3e79b891f339c430544bceb376794a23452669df6e209f85ea1cc3ed",
     "scripts/harness/init.py": "517705ed0b01f717a75c79ee17df5a1ce8fcff47899fe53c5189ea0dd35c1cb2",
     "scripts/harness/payload.py": "14b847a6ace12d4be9f7c2d85331f6bfd3c2e94f95e9e26d76228664706a9b96",

@@ -97,9 +97,20 @@ _PRIVILEGED_BASENAMES = (
 )
 _QUOTED_TEXT_RE = re.compile(r"[\"']([^\"']+)[\"']")
 _RUNNER_CMD = frozenset({"cmd", "cmd.exe"})
-_WRAPPER_PREFIXES = frozenset({"timeout", "sudo", "env", "xargs", "nohup", "nice", "command"})
+_WRAPPER_PREFIXES = frozenset(
+    {"timeout", "sudo", "env", "xargs", "nohup", "nice", "command", "builtin", "time"}
+)
+# Shell keywords followed by a command in the same segment (`then git push`, `! git commit`).
+_POSIX_INLINE_KEYWORDS = frozenset({"if", "elif", "then", "else", "do", "while", "until", "!"})
+# PowerShell keywords whose body is a `{ ... }` scriptblock in the same segment.
+_PWSH_BLOCK_KEYWORDS = frozenset(
+    {"if", "elseif", "else", "while", "for", "foreach", "switch", "try", "catch", "finally", "do"}
+)
+# Keywords whose body may not run: a `cd` inside them leaves the directory unresolved.
+_CONDITIONAL_KEYWORDS = (_POSIX_INLINE_KEYWORDS | _PWSH_BLOCK_KEYWORDS) - {"!", "try", "finally"}
 _WRAPPER_VALUE_OPTS: dict[str, frozenset[str]] = {
     "timeout": frozenset({"-s", "--signal", "-k", "--kill-after"}),
+    "time": frozenset({"-f", "--format", "-o", "--output"}),
     "sudo": frozenset(
         {
             "-u",
@@ -235,6 +246,10 @@ _WINDOWS_SYNTAX_VERBS = (
             "write-host",
             "invoke-command",
             "icm",
+            "set-location",
+            "sl",
+            "push-location",
+            "pop-location",
         }
     )
 )
@@ -316,6 +331,13 @@ class _Segment:
     redirections: tuple[str, ...]
     piped_in: bool
     piped_out: bool
+    background: bool = False
+    # Shell nesting path: `()` is the top level, each wrapper or `$(...)` adds one level.
+    scope: tuple[int, ...] = ()
+    # Inside an `if`/`while`/`for`/`case` body, which may not run.
+    conditional: bool = False
+    # Inside a function body, which runs later from an unknown directory.
+    deferred: bool = False
 
 
 def _strip_win32_device_prefix(posix_path: str) -> str:
@@ -440,10 +462,12 @@ def _has_short_flag(token: str, letter: str) -> bool:
     return token.startswith("-") and not token.startswith("--") and letter in token[1:]
 
 
-def _split_top_level(command: str, *, windows_syntax: bool = False) -> list[tuple[str, bool, bool]]:
-    """Split shell command into (segment_text, piped_in, piped_out) respecting quotes."""
+def _split_top_level(
+    command: str, *, windows_syntax: bool = False
+) -> list[tuple[str, bool, bool, bool]]:
+    """Split into (segment_text, piped_in, piped_out, background) respecting quotes."""
     posix_mode = os.name != "nt" and not windows_syntax
-    segments: list[tuple[str, bool, bool]] = []
+    segments: list[tuple[str, bool, bool, bool]] = []
     buf: list[str] = []
     in_single = False
     in_double = False
@@ -452,12 +476,12 @@ def _split_top_level(command: str, *, windows_syntax: bool = False) -> list[tupl
     i = 0
     length = len(command)
 
-    def _flush(piped_out: bool) -> None:
+    def _flush(piped_out: bool, background: bool = False) -> None:
         nonlocal prev_piped
         text = "".join(buf).strip()
         buf.clear()
         if text:
-            segments.append((text, prev_piped, piped_out))
+            segments.append((text, prev_piped, piped_out, background))
         prev_piped = piped_out
 
     while i < length:
@@ -499,7 +523,11 @@ def _split_top_level(command: str, *, windows_syntax: bool = False) -> list[tupl
                 i += 1
                 continue
             if ch == "&":
-                _flush(False)
+                if (buf and buf[-1] in "<>") or command.startswith(">", i + 1):
+                    buf.append(ch)  # `2>&1`, `>&2`, `&>file` are redirections, not jobs
+                    i += 1
+                    continue
+                _flush(False, background=True)
                 i += 1
                 continue
         buf.append(ch)
@@ -1036,12 +1064,26 @@ def _is_windows_verb(verb: str) -> bool:
 
 
 def _parse_commands(
-    command: str, piped_in: bool = False, depth: int = 0, *, windows_syntax: bool = False
+    command: str,
+    piped_in: bool = False,
+    depth: int = 0,
+    *,
+    windows_syntax: bool = False,
+    scope: tuple[int, ...] = (),
+    scope_ids: list[int] | None = None,
+    conditional: bool = False,
+    deferred: bool = False,
 ) -> list[_Segment]:
     if not command or depth > 5:
         return []
+    ids = scope_ids if scope_ids is not None else [0]
+
+    def _child_scope() -> tuple[int, ...]:
+        ids[0] += 1
+        return (*scope, ids[0])
+
     result: list[_Segment] = []
-    for seg_text, seg_piped_in, seg_piped_out in _split_top_level(
+    for seg_text, seg_piped_in, seg_piped_out, seg_background in _split_top_level(
         command, windows_syntax=windows_syntax
     ):
         effective_piped_in = piped_in or seg_piped_in
@@ -1057,18 +1099,53 @@ def _parse_commands(
                         piped_in=effective_piped_in,
                         depth=depth + 1,
                         windows_syntax=True,
+                        scope=scope,
+                        scope_ids=ids,
+                        conditional=conditional,
+                        deferred=deferred,
                     )
                 )
                 continue
             tokens, raw_tokens = _tokenize(seg_text, windows_syntax=True)
         clean_args, redirs = _extract_redirections(_ungroup(_split_param_values(tokens)))
-        seg = _Segment(clean_args, tuple(raw_tokens), redirs, effective_piped_in, seg_piped_out)
+        seg = _Segment(
+            clean_args,
+            tuple(raw_tokens),
+            redirs,
+            effective_piped_in,
+            seg_piped_out,
+            seg_background,
+            scope,
+            conditional,
+            deferred,
+        )
         if seg.tokens or seg.redirections:
             result.append(seg)
+        body, body_kind = _keyword_body(seg_text, raw_verb, raw_tokens)
+        if body:
+            result.extend(
+                _parse_commands(
+                    body,
+                    piped_in=effective_piped_in,
+                    depth=depth + 1,
+                    windows_syntax=windows_syntax,
+                    scope=scope,
+                    scope_ids=ids,
+                    conditional=conditional or body_kind != "plain",
+                    deferred=deferred or body_kind == "function",
+                )
+            )
         for inline in _inline_subshells(seg_text, windows_syntax=uses_windows_syntax):
             result.extend(
                 _parse_commands(
-                    inline, piped_in=False, depth=depth + 1, windows_syntax=uses_windows_syntax
+                    inline,
+                    piped_in=False,
+                    depth=depth + 1,
+                    windows_syntax=uses_windows_syntax,
+                    scope=_child_scope(),
+                    scope_ids=ids,
+                    conditional=conditional,
+                    deferred=deferred,
                 )
             )
         unwrapped = _unwrap_wrapper(seg)
@@ -1084,9 +1161,36 @@ def _parse_commands(
                     piped_in=effective_piped_in,
                     depth=depth + 1,
                     windows_syntax=child_windows,
+                    scope=_child_scope(),
+                    scope_ids=ids,
+                    conditional=conditional,
+                    deferred=deferred,
                 )
             )
     return result
+
+
+def _keyword_body(seg_text: str, verb: str, raw_tokens: Sequence[str]) -> tuple[str | None, str]:
+    """Command text a compound command runs in this segment, and its kind.
+
+    Kinds: `plain` (`! cmd`), `conditional` (`then`, `do`, `case` arms, `if (...) { ... }`) and
+    `function` (`f() { ... }`, `function f { ... }`), whose body runs later.
+    """
+    first = raw_tokens[0] if raw_tokens else ""
+    second = raw_tokens[1] if len(raw_tokens) > 1 else ""
+    if verb == "function" or first.endswith("()") or second.startswith("()"):
+        brace = seg_text.find("{")
+        return (seg_text[brace:], "function") if brace != -1 else (None, "plain")
+    if verb == "case" or (first.endswith(")") and "(" not in first):
+        _, _, rest = seg_text.partition(")")
+        return rest.strip() or None, "conditional"
+    kind = "conditional" if verb in _CONDITIONAL_KEYWORDS else "plain"
+    if verb in _PWSH_BLOCK_KEYWORDS and "{" in seg_text:
+        return seg_text[seg_text.index("{") :], kind
+    if verb in _POSIX_INLINE_KEYWORDS:
+        _, _, rest = seg_text.strip().partition(" ")
+        return rest.strip() or None, kind
+    return None, "plain"
 
 
 def _split_param_values(tokens: Sequence[str]) -> list[str]:
@@ -1274,6 +1378,19 @@ def sensitive_file(event: Event) -> str | None:
     return None
 
 
+# Subcommands whose `--no-verify` skips hooks, mapped to options that consume the next token.
+_GIT_NO_VERIFY_VALUE_OPTS: dict[str, frozenset[str]] = {
+    "commit": frozenset({"-m", "-F", "-C", "-c", "--message", "--file"}),
+    "push": frozenset({"-o", "--push-option", "--repo", "--receive-pack", "--exec"}),
+    "merge": frozenset(
+        {"-m", "-F", "--file", "-s", "--strategy", "-X", "--strategy-option", "--into-name"}
+    ),
+    "pull": frozenset({"-s", "--strategy", "-X", "--strategy-option"}),
+    "rebase": frozenset({"-s", "--strategy", "-X", "--strategy-option", "--onto", "-x", "--exec"}),
+    "am": frozenset({"--patch-format", "--resolvemsg"}),
+}
+
+
 def _check_git_danger(args: tuple[str, ...]) -> str | None:
     i = 0
     while i < len(args):
@@ -1298,6 +1415,24 @@ def _check_git_danger(args: tuple[str, ...]) -> str | None:
         return None
     sub = args[i]
     rest = args[i + 1 :]
+
+    if sub in _GIT_NO_VERIFY_VALUE_OPTS:
+        skip = False
+        for tok in rest:
+            if skip:
+                skip = False
+                continue
+            if tok == "--":
+                break
+            if tok in _GIT_NO_VERIFY_VALUE_OPTS[sub]:
+                skip = True
+                continue
+            # git accepts unambiguous long-option prefixes (`--no-verif`); `-n` is the same
+            # flag only for `commit` (in `push` it is `--dry-run`, in `merge`/`rebase` `--no-stat`).
+            if (tok.startswith("--no-veri") and "--no-verify".startswith(tok)) or (
+                sub == "commit" and _has_short_flag(tok, "n")
+            ):
+                return f"`git {sub} --no-verify` bypasses git hooks."
 
     if sub == "push":
         for tok in rest:
@@ -1336,17 +1471,6 @@ def _check_git_danger(args: tuple[str, ...]) -> str | None:
             return (
                 "`git branch -D` force-deletes unmerged branches; use lowercase `-d` or ask human."
             )
-    elif sub == "commit":
-        skip = False
-        for tok in rest:
-            if skip:
-                skip = False
-                continue
-            if tok in ("-m", "-F", "-C", "-c", "--message", "--file"):
-                skip = True
-                continue
-            if tok == "--no-verify" or _has_short_flag(tok, "n"):
-                return "`git commit --no-verify` bypasses commit hooks."
     elif sub == "config":
         write_flags = {"--unset", "--unset-all", "--add", "--replace-all", "--global", "--system"}
         if any(t in write_flags for t in rest):
@@ -1585,49 +1709,59 @@ def privileged_config(event: Event, root: Path = REPO_ROOT) -> str | None:
                 )
     if event.kind == "shell" and event.command:
         protected = _privileged_folders(root)
-        for seg in _parse_commands(event.command):
-            verb, args = _command_verb(seg.tokens)
-            mutating_find = verb == "find" and any(a in _FIND_ACTIONS for a in args)
-            targets = None if mutating_find else _write_targets(seg, verb, args, event.cwd, root)
-            if targets is None:
-                extra_git: tuple[str, ...] = ()
-                if verb in ("git", "git.exe"):
-                    _, git_rest, git_cwd = _git_command(args, event.cwd, root)
-                    if git_cwd != (event.cwd or str(root)):
-                        extra_git = tuple(
-                            _resolve_under(t.strip("\"'"), git_cwd)
-                            for t in git_rest
-                            if not t.startswith("-")
-                        )
-                candidates: tuple[str, ...] = (
-                    *seg.redirections,
-                    *seg.tokens[1:],
-                    *extra_git,
-                    *_inline_code_targets(verb, args),
+        segments = _parse_commands(event.command)
+        seg_cwds = _segment_cwds(segments, event.cwd or str(root))
+        for seg, tracked in zip(segments, seg_cwds, strict=True):
+            for base in _guard_bases(event.cwd, tracked, root):
+                reason = _privileged_shell_reason(seg, base, root, protected)
+                if reason:
+                    return reason
+    return None
+
+
+def _privileged_shell_reason(
+    seg: _Segment, cwd: str, root: Path, protected: tuple[str, ...]
+) -> str | None:
+    verb, args = _command_verb(seg.tokens)
+    mutating_find = verb == "find" and any(a in _FIND_ACTIONS for a in args)
+    targets = None if mutating_find else _write_targets(seg, verb, args, cwd, root)
+    if targets is None:
+        extra_git: tuple[str, ...] = ()
+        if verb in ("git", "git.exe"):
+            _, git_rest, git_cwd = _git_command(args, cwd, root)
+            if git_cwd != (cwd or str(root)):
+                extra_git = tuple(
+                    _resolve_under(t.strip("\"'"), git_cwd)
+                    for t in git_rest
+                    if not t.startswith("-")
                 )
-            else:
-                candidates = targets
-            for tok in candidates:
-                category = _is_privileged_target(tok, event.cwd, root)
-                if category:
-                    return (
-                        f"shell modification targeting privileged {category} configuration "
-                        f"(`{tok}`) requires the human directly (see `docs/adr/`)."
-                    )
-            pattern = _find_privileged_pattern(args) if mutating_find else None
-            if pattern:
-                return (
-                    f"`find -name {pattern}` with -delete/-exec matches privileged hook, MCP or "
-                    "baseline configuration; the human decides (see `docs/adr/`)."
-                )
-            folder = _protected_parent(
-                verb, args, _effective_cwd(verb, args, event.cwd, root), root, protected
+        candidates: tuple[str, ...] = (
+            *seg.redirections,
+            *seg.tokens[1:],
+            *extra_git,
+            *_inline_code_targets(verb, args),
+        )
+    else:
+        candidates = targets
+    for tok in candidates:
+        category = _is_privileged_target(tok, cwd, root)
+        if category:
+            return (
+                f"shell modification targeting privileged {category} configuration "
+                f"(`{tok}`) requires the human directly (see `docs/adr/`)."
             )
-            if folder:
-                return (
-                    f"removing, moving or overwriting `{folder}` would take hook, MCP or baseline "
-                    "configuration with it; the human decides (see `docs/adr/`)."
-                )
+    pattern = _find_privileged_pattern(args) if mutating_find else None
+    if pattern:
+        return (
+            f"`find -name {pattern}` with -delete/-exec matches privileged hook, MCP or "
+            "baseline configuration; the human decides (see `docs/adr/`)."
+        )
+    folder = _protected_parent(verb, args, _effective_cwd(verb, args, cwd, root), root, protected)
+    if folder:
+        return (
+            f"removing, moving or overwriting `{folder}` would take hook, MCP or baseline "
+            "configuration with it; the human decides (see `docs/adr/`)."
+        )
     return None
 
 
@@ -1663,6 +1797,112 @@ def _git_command(
         else:
             return tok, tuple(args[index + 1 :]), effective_cwd
     return "", (), effective_cwd
+
+
+_CD_VERBS = frozenset({"cd", "chdir", "pushd", "set-location", "sl", "push-location"})
+_PUSHD_VERBS = frozenset({"pushd", "push-location"})
+_POPD_VERBS = frozenset({"popd", "pop-location"})
+_PWSH_LOCATION_PATH_PARAMS = frozenset({"-path", "-literalpath", "-lp", "-pspath"})
+_PWSH_LOCATION_VALUE_PARAMS = frozenset({"-stackname"})
+# Characters that make a `cd` target depend on runtime state (variables, subshells, globs).
+_DYNAMIC_PATH_CHARS = frozenset("$`%*?{}()[]")
+# Placeholder base for a directory that cannot be resolved statically.
+_UNRESOLVED_CWD = "<unresolved-cwd>"
+
+
+def _cd_literal_target(args: Sequence[str]) -> str | None:
+    """Return the single static `cd`/`Set-Location` target, or None when not resolvable."""
+    positional: list[str] = []
+    idx = 0
+    while idx < len(args):
+        tok = args[idx]
+        lowered = tok.lower()
+        if lowered in _PWSH_LOCATION_PATH_PARAMS:
+            positional.extend(args[idx + 1 : idx + 2])
+            idx += 2
+            continue
+        if lowered in _PWSH_LOCATION_VALUE_PARAMS:
+            idx += 2
+            continue
+        if tok == "--":
+            positional.extend(args[idx + 1 :])
+            break
+        if (tok.startswith("-") and tok != "-") or lowered == "/d":
+            idx += 1
+            continue
+        positional.append(tok)
+        idx += 1
+    if len(positional) != 1:
+        return None
+    target = positional[0].strip("\"'")
+    if not target or target == "-" or target.startswith("~"):
+        return None
+    if any(ch in _DYNAMIC_PATH_CHARS for ch in target):
+        return None
+    return target
+
+
+def _segment_cwds(segments: Sequence[_Segment], cwd: str) -> list[str | None]:
+    """Directory each segment runs in after earlier `cd`/`pushd`/`Set-Location` in the chain.
+
+    `None` means the directory cannot be resolved statically: a `cd` to a variable, subshell,
+    `~` or `-`, a `popd` without a matching `pushd`, or a `cd` whose effect may not persist
+    (inside `( ... )`, a pipeline or a background job). A `cd` inside a nested shell
+    (`bash -c`, `$(...)`) is tracked in its own scope and makes the enclosing chain unresolved.
+    """
+    dirs: dict[tuple[int, ...], str | None] = {(): cwd}
+    stacks: dict[tuple[int, ...], list[str | None]] = {}
+    group_depth: dict[tuple[int, ...], int] = {}
+    result: list[str | None] = []
+    for seg in segments:
+        scope = seg.scope
+        if scope not in dirs:
+            parent = scope[:-1]
+            while parent not in dirs:
+                parent = parent[:-1]
+            dirs[scope] = dirs[parent]
+        result.append(None if seg.deferred else dirs[scope])
+        raw = seg.raw_tokens
+        depth = group_depth.get(scope, 0)
+        if raw and raw[0].startswith("("):
+            depth += len(raw[0]) - len(raw[0].lstrip("("))
+        verb, args = _command_verb(seg.tokens)
+        if verb in _CD_VERBS or verb in _POPD_VERBS:
+            current = dirs[scope]
+            stack = stacks.setdefault(scope, [])
+            new_dir: str | None
+            if verb in _POPD_VERBS:
+                new_dir = stack.pop() if stack else None
+            else:
+                target = _cd_literal_target(args)
+                new_dir = None
+                if target is not None and current is not None:
+                    new_dir = _resolve_under(target, current)
+                if verb in _PUSHD_VERBS:
+                    stack.append(current)
+            if (
+                depth > 0
+                or seg.piped_in
+                or seg.piped_out
+                or seg.background
+                or seg.conditional
+                or seg.deferred
+            ):
+                new_dir = None
+            dirs[scope] = new_dir
+            for level in range(len(scope)):
+                dirs[scope[:level]] = None
+        if raw and depth > 0 and raw[-1].endswith(")"):
+            depth = max(0, depth - (len(raw[-1]) - len(raw[-1].rstrip(")"))))
+        group_depth[scope] = depth
+    return result
+
+
+def _guard_bases(cwd: str, tracked: str | None, root: Path) -> tuple[str, ...]:
+    """Event cwd plus the chain-tracked directory, so a `cd` never hides a target."""
+    if tracked is None or tracked == (cwd or str(root)):
+        return (cwd,)
+    return (cwd, tracked)
 
 
 def _git_subcommand(args: Sequence[str]) -> tuple[str, tuple[str, ...]]:
@@ -2309,11 +2549,19 @@ def git_workflow(event: Event, root: Path = REPO_ROOT) -> str | None:
                     "a linked worktree."
                 )
     if event.kind == "shell" and event.command:
-        for seg in _parse_commands(event.command):
+        segments = _parse_commands(event.command)
+        seg_cwds = _segment_cwds(segments, event.cwd or str(root))
+        for seg, seg_cwd in zip(segments, seg_cwds, strict=True):
             verb, args = _command_verb(seg.tokens)
             if verb not in ("git", "git.exe"):
                 continue
-            sub, rest, git_cwd = _git_command(args, event.cwd, root)
+            sub, rest, git_cwd = _git_command(args, seg_cwd or _UNRESOLVED_CWD, root)
+            if sub in ("commit", "push") and git_cwd.startswith(_UNRESOLVED_CWD):
+                return (
+                    f"cannot resolve the directory of `git {sub}` statically (an earlier `cd` "
+                    "uses a variable, subshell, `~`, `-`, or runs inside a group, pipeline or "
+                    "background job); run it from the worktree or with an absolute `git -C`."
+                )
             target_dir = Path(_normalize_input_path(git_cwd))
             if sub == "commit":
                 info = _worktree_info(target_dir)
@@ -2378,16 +2626,19 @@ def harness_integrity(
         )
     if event.kind == "shell" and event.command:
         folders = _protected_folders(root)
-        for seg in _parse_commands(event.command):
+        segments = _parse_commands(event.command)
+        seg_cwds = _segment_cwds(segments, event.cwd or str(root))
+        for seg, tracked in zip(segments, seg_cwds, strict=True):
             verb, args = _command_verb(seg.tokens)
-            hit = _touches_protected_module(seg, event.cwd, root) or _protected_parent(
-                verb, args, _effective_cwd(verb, args, event.cwd, root), root, folders
-            )
-            if hit:
-                return (
-                    f"mutating protected harness path `{hit}` from shell is blocked; ask the human "
-                    "to review or use verified edits."
+            for base in _guard_bases(event.cwd, tracked, root):
+                hit = _touches_protected_module(seg, base, root) or _protected_parent(
+                    verb, args, _effective_cwd(verb, args, base, root), root, folders
                 )
+                if hit:
+                    return (
+                        f"mutating protected harness path `{hit}` from shell is blocked; ask the "
+                        "human to review or use verified edits."
+                    )
     return None
 
 
